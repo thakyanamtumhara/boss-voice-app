@@ -32,7 +32,14 @@ object Prefs {
     const val MODE_SCREEN_ON = "screen_on"
     const val MODE_CHARGING = "charging"
 
-    val DEFAULT_PHRASES = listOf("hey boss", "ok boss", "hi boss")
+    /**
+     * ONE phrase on purpose. In grammar mode the decoder must map every sound
+     * to one of these or to [unk], so each extra phrase is another way for
+     * ambient noise to land on a wake word. Ketu's log showed exactly that:
+     * both false wakes decoded as "hi boss", a phrase he never says, while
+     * every genuine wake was "hey boss". Spares cost more than they earn.
+     */
+    val DEFAULT_PHRASES = listOf("hey boss")
 
     private fun sp(ctx: Context) = ctx.applicationContext.getSharedPreferences(FILE, Context.MODE_PRIVATE)
 
