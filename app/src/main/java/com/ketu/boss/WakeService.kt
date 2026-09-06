@@ -141,6 +141,7 @@ class WakeService : Service(), RecognitionListener {
         }
         foregroundOk = true
         alive = true
+        Notify.clearResume(this)
 
         when (intent?.action) {
             ACTION_STOP -> { shutdownEverything(); stopSelf(); return START_NOT_STICKY }

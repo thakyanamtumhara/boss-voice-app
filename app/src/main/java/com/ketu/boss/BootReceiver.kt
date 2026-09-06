@@ -15,14 +15,10 @@ class BootReceiver : BroadcastReceiver() {
     override fun onReceive(ctx: Context, intent: Intent) {
         ReminderScheduler.rearmAll(ctx)
         if (!ctx.listening) return
-        try {
-            WakeService.start(ctx)
-        } catch (t: Throwable) {
-            // Android 14 can refuse to start a microphone service from the
-            // background. Leave a tap-to-resume notification instead of
-            // pretending listening is on.
-            Log.w("BossBoot", "service start refused after boot", t)
-            Notify.tapToResume(ctx)
-        }
+        // Android 14 refuses a microphone service started from the background,
+        // which a boot is. Bounce through an invisible activity so the app is
+        // briefly foreground; the notification stays as the fallback if even
+        // that launch is refused.
+        Notify.resumeVia(ctx, "BossBoot")
     }
 }

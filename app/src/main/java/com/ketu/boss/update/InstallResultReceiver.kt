@@ -76,6 +76,8 @@ class InstallResultReceiver : BroadcastReceiver() {
                         .addAction(0, "Resume listening", open)
                         .build())
                 Diagnostics.report(ctx, "updated", "now on $version", force = true)
+                // Get the microphone back without a tap.
+                com.ketu.boss.Notify.resumeVia(ctx, TAG)
             }
 
             else -> {

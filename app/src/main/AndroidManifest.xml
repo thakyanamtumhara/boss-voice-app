@@ -100,6 +100,14 @@
             android:taskAffinity="com.ketu.boss.alert"
             android:theme="@style/Theme.Boss" />
 
+        <activity
+            android:name=".ResumeActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:taskAffinity="com.ketu.boss.resume"
+            android:theme="@style/Theme.Boss.Invisible" />
+
         <service
             android:name=".WakeService"
             android:exported="false"
