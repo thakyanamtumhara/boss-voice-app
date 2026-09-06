@@ -87,7 +87,15 @@ class UpdateWorker(ctx: Context, params: WorkerParameters) : Worker(ctx, params)
          */
         fun runCheck(ctx: Context, manual: Boolean): Boolean {
             ctx.lastUpdateCheck = System.currentTimeMillis()
-            val r = Updater.latest() ?: return false
+            val r = Updater.latest()
+            if (r == null) {
+                // Same class of blind spot as the unreported download failure:
+                // a check that cannot reach GitHub looked identical from here
+                // to a check that never ran at all.
+                Diagnostics.report(ctx, "update_check_failed",
+                    "could not read the latest release from GitHub")
+                return false
+            }
             if (!Updater.isNewer(r.version)) {
                 Log.i(TAG, "already on the newest (${BuildConfig.VERSION_NAME})")
                 return true
