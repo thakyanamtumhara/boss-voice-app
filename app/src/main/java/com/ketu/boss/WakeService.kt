@@ -334,7 +334,7 @@ class WakeService : Service(), RecognitionListener {
         // Log finals only — partials would flood it — matched or not. This is
         // the record that distinguishes "never heard you" from "heard you and
         // could not open a window".
-        if (final && heard.length > 2 && heard != lastLogged) {
+        if ((hit || final) && heard.length > 2 && heard != lastLogged) {
             lastLogged = heard
             runCatching { addHeard(heard, hit, screenOn()) }
         }
@@ -397,27 +397,45 @@ class WakeService : Service(), RecognitionListener {
             this, 7, target,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
-        val n = NotificationCompat.Builder(this, BossApp.CH_WAKE)
+        // Android 14 can revoke the full-screen right. The notification still
+        // lands, but it will not open anything and will not light the screen —
+        // so the notification has to explain that itself, on the lock screen,
+        // at the moment it fails.
+        val blocked = Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE &&
+            !getSystemService(android.app.NotificationManager::class.java).canUseFullScreenIntent()
+
+        val b = NotificationCompat.Builder(this, BossApp.CH_WAKE)
             .setSmallIcon(R.drawable.ic_tile)
             .setContentTitle("Boss heard you")
-            .setContentText("Tap to speak")
             .setPriority(NotificationCompat.PRIORITY_MAX)
             .setCategory(NotificationCompat.CATEGORY_ALARM)
             .setAutoCancel(true)
             .setTimeoutAfter(60_000)
             .setFullScreenIntent(pi, true)
             .setContentIntent(pi)
-            .build()
-        val nm = androidx.core.app.NotificationManagerCompat.from(this)
-        runCatching { nm.notify(42, n) }
-        // Android 14 can revoke the full-screen right; if so the notification
-        // still lands but will not open anything, so say that out loud.
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE &&
-            !getSystemService(android.app.NotificationManager::class.java).canUseFullScreenIntent()
-        ) {
+
+        if (blocked) {
             Log.w(TAG, "full-screen intents are NOT permitted for this app")
             Diagnostics.report(this, "no_fullscreen", "canUseFullScreenIntent() is false", force = true)
+            b.setContentText("Tap to speak — Android is blocking the screen from opening")
+                .setStyle(
+                    NotificationCompat.BigTextStyle().bigText(
+                        "Tap to speak.\n\nThe screen could not open on its own: " +
+                            "\"Full-screen notifications\" is switched off for Boss. " +
+                            "Fix it in Boss \u2192 Setup."
+                    )
+                )
+                .addAction(0, "Fix this", PendingIntent.getActivity(
+                    this, 8,
+                    Intent(this, MainActivity::class.java)
+                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP),
+                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+                ))
+        } else {
+            b.setContentText("Tap to speak")
         }
+
+        runCatching { androidx.core.app.NotificationManagerCompat.from(this).notify(42, b.build()) }
     }
 
     // ---------- notification ----------

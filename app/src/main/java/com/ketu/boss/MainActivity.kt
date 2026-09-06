@@ -210,10 +210,60 @@ class MainActivity : AppCompatActivity() {
             Prefs.MODE_CHARGING -> b.modeCharging.isChecked = true
             else -> b.modeAlways.isChecked = true
         }
+        buildBlocker()
         buildChecklist()
         buildReminders()
         buildHeard()
         buildHistory()
+    }
+
+    /**
+     * One loud line for the thing that is actually stopping it working, in
+     * priority order. Ketu's phone had five permissions missing and the one
+     * that mattered was seventh in a flat list.
+     */
+    private fun buildBlocker() {
+        val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
+        val noFullScreen = Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE &&
+            !getSystemService(NotificationManager::class.java).canUseFullScreenIntent()
+        val noOverlay = !Settings.canDrawOverlays(this)
+        val noBattery = !pm.isIgnoringBatteryOptimizations(packageName)
+        val noMic = !granted(Manifest.permission.RECORD_AUDIO)
+
+        val (text, fix: (() -> Unit)?) = when {
+            noMic -> "Microphone is off — Boss cannot hear anything. Tap to fix." to
+                { askPermissions.launch(arrayOf(Manifest.permission.RECORD_AUDIO)) }
+            noFullScreen -> "The screen cannot light up when locked.\nTap to turn on full-screen notifications." to {
+                runCatching {
+                    startActivity(Intent(Settings.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT,
+                        Uri.parse("package:$packageName")))
+                }.onFailure { openAppSettings() }
+                Unit
+            }
+            noOverlay -> "Give Boss “Appear on top” so the pop-up can open over a locked screen." to {
+                runCatching {
+                    startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                        Uri.parse("package:$packageName")))
+                }.onFailure { openAppSettings() }
+                Unit
+            }
+            noBattery -> "Samsung will stop the listening. Tap to allow unrestricted battery." to {
+                runCatching {
+                    startActivity(Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS)
+                        .setData(Uri.parse("package:$packageName")))
+                }.onFailure { openAppSettings() }
+                Unit
+            }
+            else -> null to null
+        }
+
+        if (text == null || fix == null) {
+            b.blockerBtn.visibility = View.GONE
+            return
+        }
+        b.blockerBtn.visibility = View.VISIBLE
+        b.blockerBtn.text = "\u26a0  $text"
+        b.blockerBtn.setOnClickListener { fix() }
     }
 
     private fun showSensitivity() {
@@ -266,24 +316,6 @@ class MainActivity : AppCompatActivity() {
                 NotificationManagerCompat.from(this@MainActivity).areNotificationsEnabled()) {
                 openAppSettings()
             })
-            add(Check("Contacts", "So “call Rajesh” finds Rajesh", granted(Manifest.permission.READ_CONTACTS)) {
-                askPermissions.launch(arrayOf(Manifest.permission.READ_CONTACTS))
-            })
-            add(Check("Phone", "So it can dial without another tap", granted(Manifest.permission.CALL_PHONE)) {
-                askPermissions.launch(arrayOf(Manifest.permission.CALL_PHONE))
-            })
-            add(Check("Battery unrestricted", "Samsung kills the mic service otherwise",
-                pm.isIgnoringBatteryOptimizations(packageName)) {
-                val i = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS)
-                    .setData(Uri.parse("package:$packageName"))
-                runCatching { startActivity(i) }.onFailure { openAppSettings() }
-            })
-            add(Check("Appear on top", "Lets the pop-up open while the phone is locked",
-                Settings.canDrawOverlays(this@MainActivity)) {
-                runCatching {
-                    startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName")))
-                }.onFailure { openAppSettings() }
-            })
             // Android 14 can revoke this, and without it nothing can put a
             // window on a locked screen. This is the one that breaks
             // "hey boss" while the phone is face down on the table.
@@ -302,6 +334,24 @@ class MainActivity : AppCompatActivity() {
                     }.onFailure { openAppSettings() }
                 })
             }
+            add(Check("Contacts", "So “call Rajesh” finds Rajesh", granted(Manifest.permission.READ_CONTACTS)) {
+                askPermissions.launch(arrayOf(Manifest.permission.READ_CONTACTS))
+            })
+            add(Check("Phone", "So it can dial without another tap", granted(Manifest.permission.CALL_PHONE)) {
+                askPermissions.launch(arrayOf(Manifest.permission.CALL_PHONE))
+            })
+            add(Check("Battery unrestricted", "Samsung kills the mic service otherwise",
+                pm.isIgnoringBatteryOptimizations(packageName)) {
+                val i = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS)
+                    .setData(Uri.parse("package:$packageName"))
+                runCatching { startActivity(i) }.onFailure { openAppSettings() }
+            })
+            add(Check("Appear on top", "Lets the pop-up open while the phone is locked",
+                Settings.canDrawOverlays(this@MainActivity)) {
+                runCatching {
+                    startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName")))
+                }.onFailure { openAppSettings() }
+            })
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                 add(Check("Exact alarms", "Reminders fire to the minute", am.canScheduleExactAlarms()) {
                     runCatching {

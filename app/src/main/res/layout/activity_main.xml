@@ -58,6 +58,23 @@
             android:textColor="@color/text_lo"
             android:textSize="14sp" />
 
+        <!-- Shown only when something is actually blocking it. A flat list of
+             eight rows buries the one line that matters. -->
+        <TextView
+            android:id="@+id/blockerBtn"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="14dp"
+            android:visibility="gone"
+            android:background="@drawable/bg_warn"
+            android:padding="16dp"
+            android:textColor="@color/ink"
+            android:textSize="15sp"
+            android:textStyle="bold"
+            android:lineSpacingExtra="3dp"
+            android:clickable="true"
+            android:focusable="true" />
+
         <!-- main switch -->
         <LinearLayout
             android:layout_width="match_parent"

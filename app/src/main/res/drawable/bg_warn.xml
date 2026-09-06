@@ -1,0 +1,5 @@
+<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
+    <!-- Amber fill, dark text. Reads as urgent without relying on red. -->
+    <solid android:color="@color/amber"/>
+    <corners android:radius="18dp"/>
+</shape>
