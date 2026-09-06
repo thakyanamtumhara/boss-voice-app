@@ -110,6 +110,15 @@ class WakeService : Service(), RecognitionListener {
         super.onCreate()
         BossApp.createChannels(this)
         worker = HandlerThread("boss-vosk").apply { start() }
+
+        // Update checks were only ever armed from MainActivity.onResume, so an
+        // app that is never opened relied entirely on one periodic job that
+        // Samsung's battery manager is free to defer. The listening service
+        // runs all day; let it keep the schedule alive too.
+        runCatching {
+            com.ketu.boss.update.UpdateWorker.schedule(this)
+            com.ketu.boss.update.UpdateWorker.checkSoon(this, 3 * 60 * 60_000L)
+        }
         bg = Handler(worker.looper)
         registerReceiver(gateReceiver, IntentFilter().apply {
             addAction(Intent.ACTION_SCREEN_ON)
