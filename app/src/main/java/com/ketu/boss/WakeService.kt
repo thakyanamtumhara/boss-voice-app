@@ -50,6 +50,7 @@ class WakeService : Service(), RecognitionListener {
         const val ACTION_LISTEN_NOW = "com.ketu.boss.LISTEN_NOW"
         const val ACTION_PAUSE_1H = "com.ketu.boss.PAUSE_1H"
         const val ACTION_TEST_WAKE = "com.ketu.boss.TEST_WAKE"
+        const val EXTRA_WAS_CANCELLED = "was_cancelled"
         const val NOTIF_ID = 41
 
         /** Broadcast so the UI can show what the service is doing. */
@@ -72,8 +73,10 @@ class WakeService : Service(), RecognitionListener {
             runCatching { ctx.startService(Intent(ctx, WakeService::class.java).setAction(ACTION_STOP)) }
         }
 
-        fun resumeListening(ctx: Context) {
+        @JvmOverloads
+        fun resumeListening(ctx: Context, wasCancelled: Boolean = false) {
             val i = Intent(ctx, WakeService::class.java).setAction(ACTION_RESUME_LISTENING)
+                .putExtra(EXTRA_WAS_CANCELLED, wasCancelled)
             // startService alone is refused from the background on O+; the
             // foreground variant is the one that survives the pop-up closing.
             runCatching { ContextCompat.startForegroundService(ctx, i) }
@@ -93,6 +96,8 @@ class WakeService : Service(), RecognitionListener {
     private var triggered = false
     private var lastTriggerAt = 0L
     private var lastLogged = ""
+    /** Grows after a wake the user threw away, so a bad patch cannot nag. */
+    private var cooldownMs = 2500L
     private var stopping = false
     private var foregroundOk = false
 
@@ -168,6 +173,12 @@ class WakeService : Service(), RecognitionListener {
                 return START_STICKY
             }
             ACTION_RESUME_LISTENING -> {
+                if (intent.getBooleanExtra(EXTRA_WAS_CANCELLED, false)) {
+                    cooldownMs = (cooldownMs * 2).coerceAtMost(30_000L)
+                    Log.i(TAG, "wake was dismissed; cooldown now ${cooldownMs}ms")
+                } else {
+                    cooldownMs = 2500L
+                }
                 triggered = false
                 main.postDelayed({ ensureRunning() }, 350)
                 return START_STICKY
@@ -266,6 +277,10 @@ class WakeService : Service(), RecognitionListener {
                 freeFormFallback = true
                 Recognizer(m, 16000f)
             }
+            // Per-word confidence is the only real defence against grammar
+            // mode over-firing: the decoder MUST pick either a wake phrase or
+            // [unk], so on unclear audio it will guess a phrase.
+            runCatching { rec.setWords(true) }
             recognizer = rec
             val svc = SpeechService(rec, 16000f)
             speech = svc
@@ -300,16 +315,35 @@ class WakeService : Service(), RecognitionListener {
         runCatching { JSONObject(json ?: "{}").optString(key, "") }.getOrDefault("")
 
     override fun onPartialResult(hypothesis: String?) {
-        consider(textOf(hypothesis, "partial"), final = false)
+        // Deliberately does NOT trigger. Partials in grammar mode flicker
+        // through "hey boss" on their way to [unk], which fired the pop-up at
+        // random. Only a settled result counts now.
+        val t = textOf(hypothesis, "partial")
+        if (t.isNotBlank() && t != "[unk]") setState("listening", "Hearing…")
     }
 
     override fun onResult(hypothesis: String?) {
-        consider(textOf(hypothesis, "text"), final = true)
+        consider(textOf(hypothesis, "text"), confidence(hypothesis))
     }
 
     override fun onFinalResult(hypothesis: String?) {
-        consider(textOf(hypothesis, "text"), final = true)
+        consider(textOf(hypothesis, "text"), confidence(hypothesis))
     }
+
+    /** Mean per-word confidence of a final result, or 1.0 if unavailable. */
+    private fun confidence(json: String?): Double = runCatching {
+        val arr = JSONObject(json ?: "{}").optJSONArray("result") ?: return 1.0
+        if (arr.length() == 0) return 1.0
+        var sum = 0.0
+        var n = 0
+        for (i in 0 until arr.length()) {
+            val w = arr.optJSONObject(i) ?: continue
+            // [unk] carries no useful confidence of its own.
+            if (w.optString("word") == "[unk]") continue
+            sum += w.optDouble("conf", 1.0); n++
+        }
+        if (n == 0) 0.0 else sum / n
+    }.getOrDefault(1.0)
 
     override fun onError(e: Exception?) {
         Log.e(TAG, "recognition error", e)
@@ -324,19 +358,27 @@ class WakeService : Service(), RecognitionListener {
         main.post { ensureRunning() }
     }
 
-    private fun consider(heard: String, final: Boolean) {
+    private fun consider(heard: String, conf: Double) {
         if (triggered || heard.isBlank()) return
         val now = System.currentTimeMillis()
-        if (now - lastTriggerAt < 2500) return
+        if (now - lastTriggerAt < cooldownMs) return
         val phrases = wakePhrases
-        val hit = WakeMatcher.matches(heard, phrases, sensitivity)
+        val textMatches = WakeMatcher.matches(heard, phrases, sensitivity)
 
-        // Log finals only — partials would flood it — matched or not. This is
-        // the record that distinguishes "never heard you" from "heard you and
-        // could not open a window".
-        if ((hit || final) && heard.length > 2 && heard != lastLogged) {
+        // The wording has to have been heard clearly, not merely be the
+        // decoder's least-bad option out of a three-phrase grammar.
+        val minConf = when (sensitivity) {
+            0 -> 0.55   // loose
+            2 -> 0.90   // strict
+            else -> 0.75
+        }
+        val hit = textMatches && conf >= minConf
+
+        if (heard.length > 2 && heard != lastLogged) {
             lastLogged = heard
-            runCatching { addHeard(heard, hit, screenOn()) }
+            val note = if (textMatches && !hit)
+                heard + " (ignored, only " + Math.round(conf * 100) + "% sure)" else heard
+            runCatching { addHeard(note, hit, screenOn()) }
         }
         if (!hit) return
 

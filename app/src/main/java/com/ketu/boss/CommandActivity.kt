@@ -53,6 +53,8 @@ class CommandActivity : AppCompatActivity() {
     private var countdown: Runnable? = null
     private var finished = false
     private var triedOffline = false
+    /** True when the pop-up was thrown away — i.e. the wake was probably wrong. */
+    private var dismissedByUser = false
 
     /** Set when we asked a follow-up ("when?") and are waiting for the answer. */
     private var awaiting: Command.NeedTime? = null
@@ -66,8 +68,8 @@ class CommandActivity : AppCompatActivity() {
         b.version.text = "v" + BuildConfig.VERSION_NAME
         Speaker.init(this)
 
-        b.cancel.setOnClickListener { say(""); done() }
-        b.scrim.setOnClickListener { done() }
+        b.cancel.setOnClickListener { say(""); dismissedByUser = true; done() }
+        b.scrim.setOnClickListener { dismissedByUser = true; done() }
         b.retry.setOnClickListener { restartListening() }
         b.go.setOnClickListener { pending?.let { c -> cancelCountdown(); execute(c) } }
         b.send.setOnClickListener {
@@ -202,6 +204,9 @@ class CommandActivity : AppCompatActivity() {
                 main.postDelayed({ startListening() }, 150)
                 return
             }
+            if (error == SpeechRecognizer.ERROR_NO_MATCH ||
+                error == SpeechRecognizer.ERROR_SPEECH_TIMEOUT
+            ) dismissedByUser = true
             state(
                 when (error) {
                     SpeechRecognizer.ERROR_NO_MATCH, SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> "Didn't catch that"
@@ -394,7 +399,7 @@ class CommandActivity : AppCompatActivity() {
         cancelCountdown()
         cancelWatchdog()
         releaseRecognizer()
-        WakeService.resumeListening(this)
+        WakeService.resumeListening(this, dismissedByUser)
         finish()
         overridePendingTransition(0, 0)
     }
@@ -407,7 +412,7 @@ class CommandActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         releaseRecognizer()
-        if (!finished) WakeService.resumeListening(this)
+        if (!finished) WakeService.resumeListening(this, dismissedByUser)
         super.onDestroy()
     }
 }
