@@ -11,6 +11,15 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <!-- Boss updates itself from its own GitHub releases. -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+    <!--
+        The one that makes a self-update silent. From Android 12 an app that is
+        already its own installer-of-record may replace itself with no dialog,
+        but ONLY if it asks for this. Without it, setRequireUserAction
+        (USER_ACTION_NOT_REQUIRED) is ignored and Android shows "Update this
+        app?" every time — which is exactly what happened on the first try.
+        Normal protection level, so it is granted at install with no prompt.
+    -->
+    <uses-permission android:name="android.permission.UPDATE_PACKAGES_WITHOUT_USER_ACTION" />
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
     <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
