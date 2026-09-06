@@ -99,7 +99,8 @@ class MainActivity : AppCompatActivity() {
         b.updateSwitch.setOnCheckedChangeListener { _, v ->
             if (!b.updateSwitch.isPressed) return@setOnCheckedChangeListener
             autoUpdate = v
-            if (v) UpdateWorker.schedule(this) else UpdateWorker.cancel(this)
+            if (v) { UpdateWorker.schedule(this); UpdateWorker.checkSoon(this, 0L) }
+            else UpdateWorker.cancel(this)
             showUpdateLine()
         }
         b.checkUpdateBtn.setOnClickListener { checkForUpdateNow() }
@@ -173,6 +174,7 @@ class MainActivity : AppCompatActivity() {
         b.root.postDelayed({ Diagnostics.report(this, "open") }, 4000)
 
         UpdateWorker.schedule(this)
+        UpdateWorker.checkSoon(this)
     }
 
     override fun onPause() {

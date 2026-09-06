@@ -4,6 +4,8 @@ import android.content.Context
 import android.util.Log
 import androidx.work.Constraints
 import androidx.work.ExistingPeriodicWorkPolicy
+import androidx.work.ExistingWorkPolicy
+import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.NetworkType
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
@@ -34,6 +36,7 @@ class UpdateWorker(ctx: Context, params: WorkerParameters) : Worker(ctx, params)
     companion object {
         private const val TAG = "BossUpdate"
         private const val WORK = "boss-update-check"
+        private const val WORK_ONCE = "boss-update-check-now"
 
         fun schedule(ctx: Context) {
             val req = PeriodicWorkRequestBuilder<UpdateWorker>(6, TimeUnit.HOURS)
@@ -52,6 +55,30 @@ class UpdateWorker(ctx: Context, params: WorkerParameters) : Worker(ctx, params)
 
         fun cancel(ctx: Context) {
             runCatching { WorkManager.getInstance(ctx).cancelUniqueWork(WORK) }
+            runCatching { WorkManager.getInstance(ctx).cancelUniqueWork(WORK_ONCE) }
+        }
+
+        /**
+         * WorkManager does NOT run a periodic job when you enqueue it — the
+         * first run lands somewhere inside the first interval, so a 6-hour
+         * period can mean a 6-hour wait. That is why v1.0.9 sat there while
+         * Ketu watched. Opening the app now also queues an immediate check.
+         *
+         * Any connection, not just Wi-Fi: he is holding the phone, so this is
+         * a moment he is choosing to spend data, unlike the background poll.
+         */
+        fun checkSoon(ctx: Context, minGapMs: Long = 20 * 60_000L) {
+            if (!ctx.autoUpdate) return
+            if (System.currentTimeMillis() - ctx.lastUpdateCheck < minGapMs) return
+            val req = OneTimeWorkRequestBuilder<UpdateWorker>()
+                .setConstraints(
+                    Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build()
+                )
+                .build()
+            runCatching {
+                WorkManager.getInstance(ctx)
+                    .enqueueUniqueWork(WORK_ONCE, ExistingWorkPolicy.REPLACE, req)
+            }.onFailure { Log.w(TAG, "could not queue an immediate check", it) }
         }
 
         /**

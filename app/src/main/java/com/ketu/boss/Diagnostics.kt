@@ -13,7 +13,9 @@ import android.util.Log
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
 import com.ketu.boss.Prefs.bossId
+import com.ketu.boss.Prefs.autoUpdate
 import com.ketu.boss.Prefs.heardLog
+import com.ketu.boss.Prefs.lastUpdateCheck
 import com.ketu.boss.Prefs.history
 import com.ketu.boss.Prefs.listenMode
 import com.ketu.boss.Prefs.listening
@@ -86,6 +88,10 @@ object Diagnostics {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
                     put("full_screen_intent", nm.canUseFullScreenIntent())
                 }
+                // Without this an update downloads and then cannot install.
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    put("install_unknown_apps", ctx.packageManager.canRequestPackageInstalls())
+                }
             })
 
             o.put("state", JSONObject().apply {
@@ -108,6 +114,18 @@ object Diagnostics {
             })
 
             // The decisive evidence: what the wake engine actually decoded.
+            o.put("update", JSONObject().apply {
+                put("auto", ctx.autoUpdate)
+                put("last_check", ctx.lastUpdateCheck)
+                // Who Android thinks owns updates for this package decides
+                // whether a silent self-update is permitted at all.
+                put("installer", runCatching {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R)
+                        ctx.packageManager.getInstallSourceInfo(ctx.packageName).installingPackageName
+                    else null
+                }.getOrNull() ?: "unknown")
+            })
+
             o.put("heard", JSONArray(ctx.heardLog()))
             o.put("commands", JSONArray(ctx.history().take(15)))
             o.put("reminders_pending", ReminderStore.pending(ctx).size)
