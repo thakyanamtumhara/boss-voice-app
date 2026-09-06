@@ -129,15 +129,28 @@ object Updater {
                 }
                 when (status) {
                     DownloadManager.STATUS_SUCCESSFUL -> {
-                        if (r.size > 0 && out.length() != r.size) {
-                            Log.w(TAG, "manager finished but size is ${out.length()} of ${r.size}")
+                        // Ask where it actually put the file. Assuming the path
+                        // reported "0 of 52986368" on Ketu's phone for a
+                        // download that had in fact succeeded — DownloadManager
+                        // is free to write somewhere other than the name asked
+                        // for, and COLUMN_LOCAL_URI is the only honest answer.
+                        val localUri = c.getString(
+                            c.getColumnIndexOrThrow(DownloadManager.COLUMN_LOCAL_URI))
+                        val actual = localUri?.let { u ->
+                            runCatching { Uri.parse(u).path?.let(::File) }.getOrNull()
+                        }?.takeIf { it.exists() && it.length() > 0 } ?: out
+
+                        if (r.size > 0 && actual.length() != r.size) {
+                            Log.w(TAG, "finished but ${actual.length()} of ${r.size} at ${actual.path}")
                             Diagnostics.report(ctx, "update_download_failed",
-                                "DownloadManager finished short: ${out.length()} of ${r.size}", force = true)
-                            out.delete(); dm.remove(id)
+                                "finished short: ${actual.length()} of ${r.size}; " +
+                                    "uri=$localUri exists=${actual.exists()}", force = true)
+                            actual.delete(); dm.remove(id)
                             return@runCatching null
                         }
                         dm.remove(id)
-                        return@runCatching out
+                        Log.i(TAG, "downloaded ${actual.length()} bytes to ${actual.path}")
+                        return@runCatching actual
                     }
                     DownloadManager.STATUS_FAILED -> {
                         val reason = c.getInt(c.getColumnIndexOrThrow(DownloadManager.COLUMN_REASON))
