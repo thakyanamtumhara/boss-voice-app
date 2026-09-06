@@ -1,9 +1,12 @@
 package com.ketu.boss.update
 
+import android.app.DownloadManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageInstaller
+import android.net.Uri
+import android.os.Environment
 import android.os.Build
 import android.util.Log
 import com.ketu.boss.BuildConfig
@@ -69,20 +72,100 @@ object Updater {
     }.onFailure { Log.w(TAG, "release check failed", it) }.getOrNull()
 
     /**
-     * Downloads to private storage. Blocking.
+     * Downloads the APK. Blocking.
      *
-     * A 50 MB transfer over a phone connection gets cut often enough that one
-     * attempt is not enough — observed truncating at 48 of 53 MB on a first
-     * try. Resumes with a Range request where the server allows it, and only
-     * a complete file of exactly the right size is ever handed to the
-     * installer.
+     * Hand-rolled HTTP kept truncating a 50 MB transfer — 48 of 53 MB, then
+     * zero — so this hands the job to Android's own DownloadManager, which
+     * resumes across dropped connections and Wi-Fi/mobile handovers at the
+     * system level. The direct path stays as a fallback. Either way, only a
+     * file of exactly the advertised size ever reaches the installer.
      */
-    fun download(ctx: Context, r: Release, attempts: Int = 3): File? {
-        val dir = File(ctx.cacheDir, "updates").apply { mkdirs() }
-        dir.listFiles()?.filter { it.name != "boss-${r.version}.apk" }?.forEach { it.delete() }
-        val out = File(dir, "boss-${r.version}.apk")
+    fun download(
+        ctx: Context,
+        r: Release,
+        allowMetered: Boolean = true,
+        onProgress: (Int) -> Unit = {}
+    ): File? {
+        viaDownloadManager(ctx, r, allowMetered, onProgress)?.let { return it }
+        Log.w(TAG, "DownloadManager route failed; trying direct")
+        return direct(ctx, r, onProgress)
+    }
 
-        for (attempt in 1..attempts) {
+    private fun destDir(ctx: Context): File =
+        ctx.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS) ?: File(ctx.cacheDir, "updates")
+
+    private fun viaDownloadManager(
+        ctx: Context, r: Release, allowMetered: Boolean, onProgress: (Int) -> Unit
+    ): File? = runCatching {
+        val dm = ctx.getSystemService(Context.DOWNLOAD_SERVICE) as? DownloadManager
+            ?: return@runCatching null
+        val dir = destDir(ctx).apply { mkdirs() }
+        val name = "boss-${r.version}.apk"
+        val out = File(dir, name)
+        out.delete()
+
+        val req = DownloadManager.Request(Uri.parse(r.url))
+            .setTitle("Boss ${r.version}")
+            .setDescription("Downloading the update")
+            .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE)
+            .setAllowedOverMetered(allowMetered)
+            .setAllowedOverRoaming(false)
+            .setDestinationInExternalFilesDir(ctx, Environment.DIRECTORY_DOWNLOADS, name)
+        val id = dm.enqueue(req)
+
+        val deadline = System.currentTimeMillis() + 15 * 60_000L
+        var lastPct = -1
+        while (System.currentTimeMillis() < deadline) {
+            Thread.sleep(1500)
+            val q = DownloadManager.Query().setFilterById(id)
+            dm.query(q)?.use { c ->
+                if (!c.moveToFirst()) return@use
+                val status = c.getInt(c.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS))
+                val got = c.getLong(c.getColumnIndexOrThrow(DownloadManager.COLUMN_BYTES_DOWNLOADED_SO_FAR))
+                val total = c.getLong(c.getColumnIndexOrThrow(DownloadManager.COLUMN_TOTAL_SIZE_BYTES))
+                if (total > 0) {
+                    val pct = ((got * 100) / total).toInt()
+                    if (pct != lastPct) { lastPct = pct; onProgress(pct) }
+                }
+                when (status) {
+                    DownloadManager.STATUS_SUCCESSFUL -> {
+                        if (r.size > 0 && out.length() != r.size) {
+                            Log.w(TAG, "manager finished but size is ${out.length()} of ${r.size}")
+                            Diagnostics.report(ctx, "update_download_failed",
+                                "DownloadManager finished short: ${out.length()} of ${r.size}", force = true)
+                            out.delete(); dm.remove(id)
+                            return@runCatching null
+                        }
+                        dm.remove(id)
+                        return@runCatching out
+                    }
+                    DownloadManager.STATUS_FAILED -> {
+                        val reason = c.getInt(c.getColumnIndexOrThrow(DownloadManager.COLUMN_REASON))
+                        Log.w(TAG, "DownloadManager failed, reason=$reason")
+                        Diagnostics.report(ctx, "update_download_failed",
+                            "DownloadManager reason=$reason after $got of $total bytes", force = true)
+                        dm.remove(id)
+                        return@runCatching null
+                    }
+                }
+            }
+        }
+        Log.w(TAG, "DownloadManager timed out")
+        Diagnostics.report(ctx, "update_download_failed", "DownloadManager timed out after 15 min", force = true)
+        runCatching { dm.remove(id) }
+        null
+    }.onFailure {
+        Log.w(TAG, "DownloadManager route threw", it)
+        Diagnostics.report(ctx, "update_download_failed", "DownloadManager threw: $it", force = true)
+    }.getOrNull()
+
+    /** Fallback: three attempts, resuming with a Range request where allowed. */
+    private fun direct(ctx: Context, r: Release, onProgress: (Int) -> Unit): File? {
+        val dir = destDir(ctx).apply { mkdirs() }
+        val out = File(dir, "boss-${r.version}.apk")
+        var lastError = "unknown"
+
+        for (attempt in 1..3) {
             val have = if (out.exists()) out.length() else 0L
             if (r.size > 0 && have == r.size) return out
             if (r.size > 0 && have > r.size) out.delete()
@@ -94,27 +177,37 @@ object Updater {
                 c.readTimeout = 300_000
                 c.instanceFollowRedirects = true
                 c.setRequestProperty("User-Agent", "Boss/${BuildConfig.VERSION_NAME}")
+                c.setRequestProperty("Accept-Encoding", "identity")
                 if (from > 0) c.setRequestProperty("Range", "bytes=$from-")
                 val appending = from > 0 && c.responseCode == HttpURLConnection.HTTP_PARTIAL
                 if (from > 0 && !appending) out.delete()
+                var written = if (appending) from else 0L
                 c.inputStream.use { ins ->
                     java.io.FileOutputStream(out, appending).use { fos ->
-                        ins.copyTo(fos, 256 * 1024)
+                        val buf = ByteArray(256 * 1024)
+                        while (true) {
+                            val n = ins.read(buf)
+                            if (n <= 0) break
+                            fos.write(buf, 0, n)
+                            written += n
+                            if (r.size > 0) onProgress(((written * 100) / r.size).toInt())
+                        }
                         fos.fd.sync()
                     }
                 }
                 c.disconnect()
                 true
-            }.onFailure { Log.w(TAG, "download attempt $attempt failed", it) }.getOrDefault(false)
+            }.onFailure { lastError = it.toString(); Log.w(TAG, "direct attempt $attempt failed", it) }
+                .getOrDefault(false)
 
             val len = if (out.exists()) out.length() else 0L
             if (ok && (r.size <= 0 || len == r.size)) return out
-            Log.w(TAG, "attempt $attempt incomplete: have $len of ${r.size}")
+            lastError = "attempt $attempt got $len of ${r.size}; $lastError"
             if (!ok && len == 0L) out.delete()
             Thread.sleep(2000L * attempt)
         }
 
-        Log.w(TAG, "giving up on ${r.version} after $attempts attempts")
+        Diagnostics.report(ctx, "update_download_failed", "direct route: $lastError", force = true)
         out.delete()
         return null
     }

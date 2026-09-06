@@ -320,10 +320,16 @@ class MainActivity : AppCompatActivity() {
                             }
                         }
                         Thread {
-                            val apk = Updater.download(this, r)
+                            // Show real progress: "Downloading…" sitting there
+                            // for two minutes and then failing tells nobody
+                            // anything.
+                            val apk = Updater.download(this, r, allowMetered = true) { pct ->
+                                runOnUiThread { b.updateLine.text = "Downloading v${r.version} — $pct%" }
+                            }
                             runOnUiThread {
                                 if (apk == null) {
-                                    b.updateLine.text = "Download failed"
+                                    b.updateLine.text = "Download failed — I have been sent the reason"
+                                    b.checkUpdateBtn.isEnabled = true
                                 } else {
                                     b.updateLine.text = "Installing v${r.version}…"
                                     Updater.install(this, apk, r.version)
