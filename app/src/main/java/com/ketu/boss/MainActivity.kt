@@ -2,6 +2,7 @@ package com.ketu.boss
 
 import android.Manifest
 import android.app.AlarmManager
+import android.app.NotificationManager
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
@@ -22,6 +23,7 @@ import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
 import com.ketu.boss.Prefs.callNeedsConfirm
 import com.ketu.boss.Prefs.clearHistory
+import com.ketu.boss.Prefs.heardLog
 import com.ketu.boss.Prefs.history
 import com.ketu.boss.Prefs.listenMode
 import com.ketu.boss.Prefs.listening
@@ -89,6 +91,32 @@ class MainActivity : AppCompatActivity() {
         b.teach.setOnClickListener {
             startActivity(Intent(this, TeachWakeActivity::class.java))
         }
+        b.samsungBtn.setOnClickListener { openBatterySettings() }
+        b.lockTestBtn.setOnClickListener {
+            if (!listening) {
+                android.widget.Toast.makeText(this, "Turn listening on first", android.widget.Toast.LENGTH_SHORT).show()
+            } else {
+                runCatching {
+                    ContextCompat.startForegroundService(
+                        this,
+                        Intent(this, WakeService::class.java).setAction(WakeService.ACTION_TEST_WAKE)
+                    )
+                }
+                android.widget.Toast.makeText(
+                    this, "Lock your phone now — it should light up in 5 seconds",
+                    android.widget.Toast.LENGTH_LONG
+                ).show()
+            }
+        }
+        b.reportBtn.setOnClickListener {
+            Diagnostics.report(this, "manual", "sent from the app", force = true)
+            android.widget.Toast.makeText(this, "Report sent to Claude", android.widget.Toast.LENGTH_SHORT).show()
+        }
+        b.copyBtn.setOnClickListener {
+            val cm = getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+            cm.setPrimaryClip(android.content.ClipData.newPlainText("Boss report", Diagnostics.asText(this)))
+            android.widget.Toast.makeText(this, "Copied — paste it to Claude", android.widget.Toast.LENGTH_LONG).show()
+        }
         b.modeAlways.setOnClickListener { setMode(Prefs.MODE_ALWAYS) }
         b.modeScreen.setOnClickListener { setMode(Prefs.MODE_SCREEN_ON) }
         b.modeCharging.setOnClickListener { setMode(Prefs.MODE_CHARGING) }
@@ -122,6 +150,8 @@ class MainActivity : AppCompatActivity() {
         )
         refresh()
         showState(WakeService.state, WakeService.detail)
+
+        Diagnostics.report(this, "open")
 
         if (pendingAutostart) { pendingAutostart = false; turnOn() }
         // Self-heal: if listening is meant to be on but Android stopped the
@@ -182,6 +212,7 @@ class MainActivity : AppCompatActivity() {
         }
         buildChecklist()
         buildReminders()
+        buildHeard()
         buildHistory()
     }
 
@@ -253,6 +284,24 @@ class MainActivity : AppCompatActivity() {
                     startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName")))
                 }.onFailure { openAppSettings() }
             })
+            // Android 14 can revoke this, and without it nothing can put a
+            // window on a locked screen. This is the one that breaks
+            // "hey boss" while the phone is face down on the table.
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                val nm = getSystemService(NotificationManager::class.java)
+                add(Check(
+                    "Full-screen notifications",
+                    "Required to light up a locked screen",
+                    nm.canUseFullScreenIntent()
+                ) {
+                    runCatching {
+                        startActivity(
+                            Intent(Settings.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT,
+                                Uri.parse("package:$packageName"))
+                        )
+                    }.onFailure { openAppSettings() }
+                })
+            }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                 add(Check("Exact alarms", "Reminders fire to the minute", am.canScheduleExactAlarms()) {
                     runCatching {
@@ -306,6 +355,31 @@ class MainActivity : AppCompatActivity() {
         return row
     }
 
+    /**
+     * Samsung's "sleeping apps" list cannot be read or changed by an app, so
+     * the best we can do is land on the right screen. Each of these exists on
+     * some One UI versions and not others, hence the chain.
+     */
+    private fun openBatterySettings() {
+        val tries = listOf(
+            Intent().setClassName(
+                "com.samsung.android.lool",
+                "com.samsung.android.sm.battery.ui.setting.SleepingAppsActivity"
+            ),
+            Intent().setClassName(
+                "com.samsung.android.lool",
+                "com.samsung.android.sm.ui.battery.BatteryActivity"
+            ),
+            Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
+                .setData(Uri.parse("package:$packageName"))
+        )
+        for (i in tries) {
+            if (runCatching { startActivity(i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)); true }
+                    .getOrDefault(false)
+            ) return
+        }
+    }
+
     private fun openAppSettings() {
         runCatching {
             startActivity(
@@ -350,6 +424,44 @@ class MainActivity : AppCompatActivity() {
             })
             b.reminderList.addView(row)
         }
+    }
+
+    /**
+     * Everything the wake engine decoded, hit or miss. If this is empty while
+     * listening is on, the microphone is the problem; if it is full of lines
+     * but none say HEARD, the wake word is the problem.
+     */
+    private fun buildHeard() {
+        b.heardList.removeAllViews()
+        val lines = heardLog()
+        if (lines.isEmpty()) {
+            b.heardList.addView(muted(
+                "Nothing yet. Say your wake word — whatever the phone decodes shows up here, " +
+                    "even when it is not a match."
+            ))
+            return
+        }
+        lines.take(12).forEach { raw ->
+            val p = raw.split("|", limit = 4)
+            val ts = p.getOrNull(0)?.toLongOrNull() ?: 0L
+            val hit = p.getOrNull(1) == "HIT"
+            val screen = p.getOrNull(2) ?: ""
+            val text = p.getOrNull(3).orEmpty()
+            b.heardList.addView(TextView(this).apply {
+                // Word + symbol carry the state, not colour alone.
+                this.text = (if (hit) "● HEARD  " else "○ ") + "\"" + text + "\"" +
+                    "\n" + Fmt.clock(ts) + " · screen " + screen
+                textSize = 13f
+                setPadding(4, 8, 4, 8)
+                setTextColor(ContextCompat.getColor(context, if (hit) R.color.amber else R.color.text_lo))
+            })
+        }
+        b.heardList.addView(Button(this).apply {
+            text = "Clear"; isAllCaps = false
+            setBackgroundResource(R.drawable.bg_chip)
+            setTextColor(ContextCompat.getColor(context, R.color.text_lo))
+            setOnClickListener { Prefs.run { clearHeard() }; buildHeard() }
+        })
     }
 
     private fun buildHistory() {

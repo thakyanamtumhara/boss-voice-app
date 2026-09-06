@@ -40,6 +40,9 @@ jobs:
         run: ./gradlew :app:testDebugUnitTest --console=plain
 
       - name: Build release APK
+        env:
+          BOSS_BUG_URL: ${{ secrets.BOSS_BUG_URL }}
+          BOSS_BUG_WRITE_KEY: ${{ secrets.BOSS_BUG_WRITE_KEY }}
         run: ./gradlew :app:assembleRelease --console=plain
 
       - name: Name the APK

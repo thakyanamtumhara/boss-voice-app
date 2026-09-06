@@ -1,0 +1,8 @@
+{
+  "name": "bossbug",
+  "main": "worker.js",
+  "compatibility_date": "2026-09-01",
+  "kv_namespaces": [
+    { "binding": "BUGS", "id": "b7536d5fe6204ae18050802910fcc507" }
+  ]
+}

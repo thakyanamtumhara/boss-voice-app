@@ -17,6 +17,12 @@ android {
         versionName = "1.0.${System.getenv("GITHUB_RUN_NUMBER") ?: "0"}"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
+        // Private bug sink so a fault on the phone is visible from the Mac.
+        // Injected at build time and never committed; blank in a plain build,
+        // which simply turns reporting off.
+        buildConfigField("String", "BUG_URL", "\"${System.getenv("BOSS_BUG_URL") ?: ""}\"")
+        buildConfigField("String", "BUG_KEY", "\"${System.getenv("BOSS_BUG_WRITE_KEY") ?: ""}\"")
+
         // Galaxy S23 is arm64 only. The vosk AAR ships four ABIs (~40 MB of
         // .so); filtering to one keeps the APK about 30 MB smaller.
         ndk { abiFilters += "arm64-v8a" }

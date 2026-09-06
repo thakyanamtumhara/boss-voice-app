@@ -36,6 +36,13 @@ class CommandActivity : AppCompatActivity() {
     companion object {
         const val EXTRA_PREFILL = "prefill"
         private const val TAG = "BossCmd"
+
+        /**
+         * Whether a pop-up is actually on screen. [WakeService] needs this
+         * because a blocked background activity launch throws nothing — the
+         * only way to know it failed is that no window appeared.
+         */
+        @Volatile var showing: Boolean = false; private set
     }
 
     private lateinit var b: ActivityCommandBinding
@@ -81,6 +88,10 @@ class CommandActivity : AppCompatActivity() {
         }
     }
 
+    override fun onStart() { super.onStart(); showing = true }
+
+    override fun onStop() { showing = false; super.onStop() }
+
     override fun onNewIntent(intent: Intent?) {
         super.onNewIntent(intent)
         setIntent(intent)
@@ -90,6 +101,12 @@ class CommandActivity : AppCompatActivity() {
     private fun showOverLockScreen() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
             setShowWhenLocked(true); setTurnScreenOn(true)
+            // Ask the keyguard to step aside. Denied on a secure lock screen,
+            // which is fine — the pop-up still shows over it.
+            runCatching {
+                (getSystemService(KEYGUARD_SERVICE) as android.app.KeyguardManager)
+                    .requestDismissKeyguard(this, null)
+            }
         } else {
             @Suppress("DEPRECATION")
             window.addFlags(
@@ -290,9 +307,16 @@ class CommandActivity : AppCompatActivity() {
 
         state(if (out.ok) "Done" else "Couldn't do it")
         b.interpretation.text = out.detail ?: out.say
-        if (!out.ok) {
-            b.interpretation.text = out.say + (out.detail?.let { "\n$it" } ?: "")
-            Notify.said(this, out.say, out.detail)
+        if (!out.ok) b.interpretation.text = out.say + (out.detail?.let { "\n$it" } ?: "")
+        // Always leave a note. The pop-up often disappears behind whatever app
+        // the action opened, so the notification is the lasting proof.
+        val note = (out.detail ?: out.say).trim()
+        if (note.isNotEmpty()) {
+            Notify.said(
+                this,
+                (if (out.ok) "✓ " else "× ") + note,
+                "heard: \"" + b.heard.text + "\""
+            )
         }
         say(out.say) { done() }
         // Never leave the pop-up sitting there if speech is off or fails.

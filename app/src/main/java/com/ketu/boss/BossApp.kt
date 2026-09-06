@@ -10,12 +10,14 @@ class BossApp : Application() {
     override fun onCreate() {
         super.onCreate()
         createChannels(this)
+        Diagnostics.installCrashHandler(this)
     }
 
     companion object {
         const val CH_SERVICE = "boss_service"
         const val CH_REMINDER = "boss_reminder"
         const val CH_ALERT = "boss_alert"
+        const val CH_WAKE = "boss_wake"
 
         fun createChannels(ctx: Context) {
             if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
@@ -44,6 +46,20 @@ class BossApp : Application() {
             nm.createNotificationChannel(
                 NotificationChannel(CH_ALERT, "Boss says", NotificationManager.IMPORTANCE_DEFAULT).apply {
                     description = "Confirmations and errors from a spoken command."
+                }
+            )
+
+            // Must be HIGH: a full-screen intent is only honoured from a
+            // high-importance channel, and that is the only sanctioned way to
+            // put the listening pop-up on a locked screen. Silent, because the
+            // chime has already played by the time this fires.
+            nm.createNotificationChannel(
+                NotificationChannel(CH_WAKE, "Heard the wake word", NotificationManager.IMPORTANCE_HIGH).apply {
+                    description = "Opens the listening pop-up when the screen is off or locked."
+                    setSound(null, null)
+                    enableVibration(false)
+                    setBypassDnd(true)
+                    lockscreenVisibility = android.app.Notification.VISIBILITY_PUBLIC
                 }
             )
         }

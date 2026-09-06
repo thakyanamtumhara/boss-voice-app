@@ -112,6 +112,14 @@
             android:layout_marginTop="8dp"
             android:text="Change the wake word" />
 
+        <Button
+            android:id="@+id/lockTestBtn"
+            style="@style/Widget.Material3.Button.OutlinedButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="Test it on the lock screen (5s)" />
+
         <!-- setup -->
         <TextView style="@style/BossSection" android:text="Setup" />
         <LinearLayout
@@ -132,6 +140,14 @@
             android:textColor="@color/text_lo"
             android:textSize="13sp"
             android:lineSpacingExtra="3dp" />
+
+        <Button
+            android:id="@+id/samsungBtn"
+            style="@style/Widget.Material3.Button.OutlinedButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="Open the battery settings for Boss" />
 
         <!-- options -->
         <TextView style="@style/BossSection" android:text="Options" />
@@ -214,6 +230,16 @@
             android:background="@drawable/bg_card"
             android:padding="12dp" />
 
+        <!-- what the wake engine actually decoded -->
+        <TextView style="@style/BossSection" android:text="What it heard" />
+        <LinearLayout
+            android:id="@+id/heardList"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:background="@drawable/bg_card"
+            android:padding="12dp" />
+
         <!-- what it can do -->
         <TextView style="@style/BossSection" android:text="Things you can say" />
         <TextView
@@ -235,6 +261,21 @@
             android:orientation="vertical"
             android:background="@drawable/bg_card"
             android:padding="12dp" />
+
+        <TextView style="@style/BossSection" android:text="Something wrong?" />
+        <Button
+            android:id="@+id/reportBtn"
+            style="@style/Widget.Material3.Button"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Send a bug report to Claude" />
+        <Button
+            android:id="@+id/copyBtn"
+            style="@style/Widget.Material3.Button.OutlinedButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="Copy the report (paste it on WhatsApp)" />
 
         <TextView
             android:id="@+id/footer"

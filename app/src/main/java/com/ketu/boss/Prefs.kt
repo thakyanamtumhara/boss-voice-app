@@ -21,6 +21,8 @@ object Prefs {
     private const val K_HISTORY = "history"
     private const val K_PAUSED_UNTIL = "paused_until"
     private const val K_SENSITIVITY = "sensitivity"
+    private const val K_HEARD = "heard_log"
+    private const val K_DEVICE = "device_id"
 
     /** Wake-word listening windows, so the mic need not run 24/7. */
     const val MODE_ALWAYS = "always"
@@ -100,4 +102,43 @@ object Prefs {
     }
 
     fun Context.clearHistory() = sp(this).edit().remove(K_HISTORY).apply()
+
+    /**
+     * Everything the wake engine decoded, matched or not. This is the one
+     * thing that answers "is it even hearing me?" — without it a silent
+     * failure is indistinguishable from a deaf microphone.
+     */
+    fun Context.heardLog(): List<String> {
+        val raw = sp(this).getString(K_HEARD, null) ?: return emptyList()
+        return runCatching {
+            val a = JSONArray(raw)
+            (0 until a.length()).map { a.getString(it) }
+        }.getOrDefault(emptyList())
+    }
+
+    fun Context.addHeard(text: String, matched: Boolean, screenOn: Boolean) {
+        if (text.isBlank()) return
+        val line = "${System.currentTimeMillis()}|${if (matched) "HIT" else "---"}|" +
+            "${if (screenOn) "on" else "off"}|${text.take(90)}"
+        val next = (listOf(line) + heardLog()).take(30)
+        val a = JSONArray()
+        next.forEach { a.put(it) }
+        sp(this).edit().putString(K_HEARD, a.toString()).apply()
+    }
+
+    fun Context.clearHeard() = sp(this).edit().remove(K_HEARD).apply()
+
+    /**
+     * Stable random id so reports from this phone can be grouped.
+     * NOT named deviceId: Context.getDeviceId() exists from API 34 and a
+     * member wins over an extension, so that name silently resolves to the
+     * platform's Int and every report gets tagged "0".
+     */
+    val Context.bossId: String
+        get() {
+            sp(this).getString(K_DEVICE, null)?.let { return it }
+            val id = java.util.UUID.randomUUID().toString().take(8)
+            sp(this).edit().putString(K_DEVICE, id).apply()
+            return id
+        }
 }

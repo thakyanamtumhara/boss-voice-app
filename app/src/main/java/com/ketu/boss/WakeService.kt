@@ -26,6 +26,7 @@ import com.ketu.boss.Prefs.pausedUntil
 import com.ketu.boss.Prefs.sensitivity
 import com.ketu.boss.Prefs.spokenWakeWord
 import com.ketu.boss.Prefs.wakePhrases
+import com.ketu.boss.Prefs.addHeard
 import org.json.JSONObject
 import org.vosk.Model
 import org.vosk.Recognizer
@@ -48,6 +49,7 @@ class WakeService : Service(), RecognitionListener {
         const val ACTION_RESUME_LISTENING = "com.ketu.boss.RESUME"
         const val ACTION_LISTEN_NOW = "com.ketu.boss.LISTEN_NOW"
         const val ACTION_PAUSE_1H = "com.ketu.boss.PAUSE_1H"
+        const val ACTION_TEST_WAKE = "com.ketu.boss.TEST_WAKE"
         const val NOTIF_ID = 41
 
         /** Broadcast so the UI can show what the service is doing. */
@@ -90,6 +92,7 @@ class WakeService : Service(), RecognitionListener {
 
     private var triggered = false
     private var lastTriggerAt = 0L
+    private var lastLogged = ""
     private var stopping = false
     private var foregroundOk = false
 
@@ -124,6 +127,7 @@ class WakeService : Service(), RecognitionListener {
             startForeground(NOTIF_ID, buildNotification(getString(R.string.app_name), "Starting…"))
         } catch (t: Throwable) {
             Log.w(TAG, "foreground start refused", t)
+            Diagnostics.report(this, "fgs_refused", t.toString(), force = true)
             foregroundOk = false
             setStateNoNotify("blocked", "Android blocked the mic — open Boss once to resume")
             Notify.tapToResume(this)
@@ -145,6 +149,22 @@ class WakeService : Service(), RecognitionListener {
                 stopRecognition()
                 triggered = true
                 launchCommandUi(null)
+                return START_STICKY
+            }
+            // Fires the real wake path after a delay, so the phone can be
+            // locked first. The only honest way to check that a locked screen
+            // actually lights up.
+            ACTION_TEST_WAKE -> {
+                setState("listening", "Test wake in 5 seconds — lock the phone now")
+                main.postDelayed({
+                    stopRecognition()
+                    triggered = true
+                    lastTriggerAt = System.currentTimeMillis()
+                    Speaker.chime(this)
+                    Speaker.vibrate(this)
+                    setState("heard", "Test wake")
+                    launchCommandUi(null)
+                }, 5000)
                 return START_STICKY
             }
             ACTION_RESUME_LISTENING -> {
@@ -225,6 +245,7 @@ class WakeService : Service(), RecognitionListener {
                 main.post { startRecognizer(m) }
             } catch (t: Throwable) {
                 Log.e(TAG, "model load failed", t)
+                Diagnostics.report(this, "model_failed", t.toString(), force = true)
                 main.post { setState("error", "Speech model failed to load") }
             }
         }
@@ -252,6 +273,7 @@ class WakeService : Service(), RecognitionListener {
             setState("listening", getString(R.string.listening_for, spokenWakeWord))
         } catch (t: Throwable) {
             Log.e(TAG, "could not start listening", t)
+            Diagnostics.report(this, "mic_busy", t.toString())
             setState("error", "Microphone is busy")
             stopRecognition()
         }
@@ -278,19 +300,20 @@ class WakeService : Service(), RecognitionListener {
         runCatching { JSONObject(json ?: "{}").optString(key, "") }.getOrDefault("")
 
     override fun onPartialResult(hypothesis: String?) {
-        consider(textOf(hypothesis, "partial"))
+        consider(textOf(hypothesis, "partial"), final = false)
     }
 
     override fun onResult(hypothesis: String?) {
-        consider(textOf(hypothesis, "text"))
+        consider(textOf(hypothesis, "text"), final = true)
     }
 
     override fun onFinalResult(hypothesis: String?) {
-        consider(textOf(hypothesis, "text"))
+        consider(textOf(hypothesis, "text"), final = true)
     }
 
     override fun onError(e: Exception?) {
         Log.e(TAG, "recognition error", e)
+        Diagnostics.report(this, "recog_error", e?.toString())
         setState("error", e?.message ?: "Recognition error")
         stopRecognition()
         main.postDelayed({ ensureRunning() }, 2000)
@@ -301,12 +324,21 @@ class WakeService : Service(), RecognitionListener {
         main.post { ensureRunning() }
     }
 
-    private fun consider(heard: String) {
+    private fun consider(heard: String, final: Boolean) {
         if (triggered || heard.isBlank()) return
         val now = System.currentTimeMillis()
         if (now - lastTriggerAt < 2500) return
         val phrases = wakePhrases
-        if (!WakeMatcher.matches(heard, phrases, sensitivity)) return
+        val hit = WakeMatcher.matches(heard, phrases, sensitivity)
+
+        // Log finals only — partials would flood it — matched or not. This is
+        // the record that distinguishes "never heard you" from "heard you and
+        // could not open a window".
+        if (final && heard.length > 2 && heard != lastLogged) {
+            lastLogged = heard
+            runCatching { addHeard(heard, hit, screenOn()) }
+        }
+        if (!hit) return
 
         lastTriggerAt = now
         triggered = true
@@ -320,16 +352,42 @@ class WakeService : Service(), RecognitionListener {
         launchCommandUi(tail)
     }
 
+    private fun locked(): Boolean =
+        (getSystemService(Context.KEYGUARD_SERVICE) as android.app.KeyguardManager).isKeyguardLocked
+
     private fun launchCommandUi(prefill: String?) {
         val i = Intent(this, CommandActivity::class.java)
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
             .putExtra(CommandActivity.EXTRA_PREFILL, prefill)
-        try {
-            startActivity(i)
-        } catch (t: Throwable) {
-            Log.w(TAG, "direct launch blocked, using full-screen notification", t)
+
+        // Hold the CPU across the hand-off. Without this the process can be
+        // frozen again before the window is up.
+        val wl = runCatching {
+            (getSystemService(Context.POWER_SERVICE) as PowerManager)
+                .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "boss:wake")
+                .apply { acquire(15_000) }
+        }.getOrNull()
+        main.postDelayed({ runCatching { if (wl?.isHeld == true) wl.release() } }, 14_000)
+
+        val awake = screenOn() && !locked()
+        if (awake) {
+            // startActivity from a service is SILENTLY dropped on Android 10+
+            // when the app is not foreground — there is no exception to catch.
+            // So try it, then check whether a window actually appeared.
+            runCatching { startActivity(i) }
+            main.postDelayed({
+                if (triggered && !CommandActivity.showing) {
+                    Log.w(TAG, "direct launch did not take, falling back to full-screen intent")
+                    Diagnostics.report(this, "launch_blocked", "screen was on but no window appeared")
+                    showFullScreenLauncher(i)
+                }
+            }, 1200)
+        } else {
+            // Screen off or locked: a full-screen intent is the only sanctioned
+            // way to put a window up, and it is what turns the screen on.
             showFullScreenLauncher(i)
         }
+
         // Safety net: if the pop-up never reports back, resume anyway.
         main.postDelayed({ if (triggered) { triggered = false; ensureRunning() } }, 90_000)
     }
@@ -339,18 +397,26 @@ class WakeService : Service(), RecognitionListener {
             this, 7, target,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
-        val n = NotificationCompat.Builder(this, BossApp.CH_REMINDER)
+        val n = NotificationCompat.Builder(this, BossApp.CH_WAKE)
             .setSmallIcon(R.drawable.ic_tile)
-            .setContentTitle("Boss is listening")
+            .setContentTitle("Boss heard you")
             .setContentText("Tap to speak")
-            .setPriority(NotificationCompat.PRIORITY_HIGH)
-            .setCategory(NotificationCompat.CATEGORY_CALL)
+            .setPriority(NotificationCompat.PRIORITY_MAX)
+            .setCategory(NotificationCompat.CATEGORY_ALARM)
             .setAutoCancel(true)
+            .setTimeoutAfter(60_000)
             .setFullScreenIntent(pi, true)
             .setContentIntent(pi)
             .build()
-        runCatching {
-            androidx.core.app.NotificationManagerCompat.from(this).notify(42, n)
+        val nm = androidx.core.app.NotificationManagerCompat.from(this)
+        runCatching { nm.notify(42, n) }
+        // Android 14 can revoke the full-screen right; if so the notification
+        // still lands but will not open anything, so say that out loud.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE &&
+            !getSystemService(android.app.NotificationManager::class.java).canUseFullScreenIntent()
+        ) {
+            Log.w(TAG, "full-screen intents are NOT permitted for this app")
+            Diagnostics.report(this, "no_fullscreen", "canUseFullScreenIntent() is false", force = true)
         }
     }
 
