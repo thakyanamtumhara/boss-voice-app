@@ -101,12 +101,11 @@ class CommandActivity : AppCompatActivity() {
     private fun showOverLockScreen() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
             setShowWhenLocked(true); setTurnScreenOn(true)
-            // Ask the keyguard to step aside. Denied on a secure lock screen,
-            // which is fine — the pop-up still shows over it.
-            runCatching {
-                (getSystemService(KEYGUARD_SERVICE) as android.app.KeyguardManager)
-                    .requestDismissKeyguard(this, null)
-            }
+            // Deliberately NOT dismissing the keyguard here. Doing it on launch
+            // made the phone demand a PIN before it would even listen — and
+            // most of what gets asked for (alarm, reminder, timer, torch, the
+            // time) needs no unlocking at all. The prompt is deferred to the
+            // one action that actually cannot proceed without it.
         } else {
             @Suppress("DEPRECATION")
             window.addFlags(
@@ -300,6 +299,32 @@ class CommandActivity : AppCompatActivity() {
     private fun execute(c: Command) {
         cancelCountdown()
         b.go.visibility = View.GONE
+
+        // Only now, and only if this particular command cannot work behind a
+        // lock screen, ask for the PIN — so the prompt is always attached to
+        // something that needed it.
+        if (c.needsUnlock && isLocked()) {
+            state("Unlock to do this")
+            runCatching {
+                (getSystemService(KEYGUARD_SERVICE) as android.app.KeyguardManager)
+                    .requestDismissKeyguard(this, object : android.app.KeyguardManager.KeyguardDismissCallback() {
+                        override fun onDismissSucceeded() { main.post { runAction(c) } }
+                        override fun onDismissError() { main.post { runAction(c) } }
+                        override fun onDismissCancelled() {
+                            main.post { state("Cancelled"); done() }
+                        }
+                    })
+            }.onFailure { runAction(c) }
+            return
+        }
+        runAction(c)
+    }
+
+    private fun isLocked(): Boolean = runCatching {
+        (getSystemService(KEYGUARD_SERVICE) as android.app.KeyguardManager).isKeyguardLocked
+    }.getOrDefault(false)
+
+    private fun runAction(c: Command) {
         val out: Outcome = ActionRunner.run(this, c)
         addHistory((if (out.ok) "OK|" else "NO|") + c.title)
 

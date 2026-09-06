@@ -23,6 +23,9 @@ object Prefs {
     private const val K_SENSITIVITY = "sensitivity"
     private const val K_HEARD = "heard_log"
     private const val K_DEVICE = "device_id"
+    private const val K_AUTO_UPDATE = "auto_update"
+    private const val K_LAST_CHECK = "last_update_check"
+    private const val K_ATTEMPT = "update_attempt"
 
     /** Wake-word listening windows, so the mic need not run 24/7. */
     const val MODE_ALWAYS = "always"
@@ -79,6 +82,24 @@ object Prefs {
     var Context.sensitivity: Int
         get() = sp(this).getInt(K_SENSITIVITY, 1)
         set(v) = sp(this).edit().putInt(K_SENSITIVITY, v.coerceIn(0, 2)).apply()
+
+    /** Boss keeps itself up to date. Wi-Fi only when it runs unattended. */
+    var Context.autoUpdate: Boolean
+        get() = sp(this).getBoolean(K_AUTO_UPDATE, true)
+        set(v) = sp(this).edit().putBoolean(K_AUTO_UPDATE, v).apply()
+
+    var Context.lastUpdateCheck: Long
+        get() = sp(this).getLong(K_LAST_CHECK, 0L)
+        set(v) = sp(this).edit().putLong(K_LAST_CHECK, v).apply()
+
+    /** version -> how many times we have tried to install it. */
+    var Context.updateAttempt: Pair<String, Int>
+        get() {
+            val raw = sp(this).getString(K_ATTEMPT, null) ?: return "" to 0
+            val i = raw.lastIndexOf('|')
+            return if (i < 0) "" to 0 else raw.substring(0, i) to (raw.substring(i + 1).toIntOrNull() ?: 0)
+        }
+        set(v) = sp(this).edit().putString(K_ATTEMPT, "${v.first}|${v.second}").apply()
 
     var Context.pausedUntil: Long
         get() = sp(this).getLong(K_PAUSED_UNTIL, 0L)

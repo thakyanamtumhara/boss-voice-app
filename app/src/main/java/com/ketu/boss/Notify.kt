@@ -20,7 +20,7 @@ object Notify {
         val n = NotificationCompat.Builder(ctx, BossApp.CH_ALERT)
             .setSmallIcon(R.drawable.ic_tile)
             .setContentTitle("Boss is not listening")
-            .setContentText("Android blocked the mic after restart. Tap to resume.")
+            .setContentText("Android needs one tap after a restart or update. Tap to resume.")
             .setAutoCancel(true)
             .setContentIntent(pi)
             .build()

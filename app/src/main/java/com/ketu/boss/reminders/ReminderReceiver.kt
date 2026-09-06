@@ -17,6 +17,7 @@ class ReminderReceiver : BroadcastReceiver() {
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
             .putExtra(ReminderAlertActivity.EXTRA_TEXT, r.text)
             .putExtra(ReminderAlertActivity.EXTRA_AT, r.atMillis)
+            .putExtra(ReminderAlertActivity.EXTRA_IS_ALARM, r.isAlarm)
         runCatching { ctx.startActivity(alert) }
             .onFailure { ReminderAlertActivity.postFullScreen(ctx, r) }
         // Always leave the notification too, so nothing is lost if the screen

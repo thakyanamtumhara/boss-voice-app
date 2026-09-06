@@ -56,7 +56,21 @@ object ActionRunner {
 
     // ---------- clock ----------
 
+    private fun locked(ctx: Context): Boolean = runCatching {
+        (ctx.getSystemService(Context.KEYGUARD_SERVICE) as android.app.KeyguardManager).isKeyguardLocked
+    }.getOrDefault(false)
+
     private fun alarm(ctx: Context, c: Command.Alarm): Outcome {
+        // Handing this to the Clock app means launching its activity, and
+        // Android will demand the PIN first. Setting a 6:30 alarm from the
+        // pillow is the whole point, so Boss rings it itself instead. Once
+        // unlocked it goes to the real clock, where he can see and edit it.
+        if (locked(ctx)) {
+            val label = c.label?.takeIf { it.isNotBlank() } ?: "Alarm"
+            val r = ReminderStore.add(ctx, c.atMillis, label, isAlarm = true)
+            ReminderScheduler.schedule(ctx, r)
+            return Outcome(true, c.spoken, c.title + " · Boss will ring it (phone was locked)")
+        }
         val i = Intent(AlarmClock.ACTION_SET_ALARM)
             .putExtra(AlarmClock.EXTRA_HOUR, c.hour)
             .putExtra(AlarmClock.EXTRA_MINUTES, c.minute)
@@ -67,6 +81,12 @@ object ActionRunner {
     }
 
     private fun timer(ctx: Context, c: Command.Timer): Outcome {
+        if (locked(ctx)) {
+            val at = System.currentTimeMillis() + c.seconds * 1000L
+            val r = ReminderStore.add(ctx, at, c.label?.takeIf { it.isNotBlank() } ?: "Timer", isAlarm = true)
+            ReminderScheduler.schedule(ctx, r)
+            return Outcome(true, c.spoken, c.title + " · Boss will ring it (phone was locked)")
+        }
         val i = Intent(AlarmClock.ACTION_SET_TIMER)
             .putExtra(AlarmClock.EXTRA_LENGTH, c.seconds)
             .putExtra(AlarmClock.EXTRA_SKIP_UI, true)

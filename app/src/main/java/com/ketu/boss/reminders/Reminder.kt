@@ -4,13 +4,21 @@ import android.content.Context
 import org.json.JSONArray
 import org.json.JSONObject
 
-data class Reminder(val id: Int, val atMillis: Long, val text: String, val done: Boolean = false) {
+data class Reminder(
+    val id: Int,
+    val atMillis: Long,
+    val text: String,
+    val done: Boolean = false,
+    /** Rings as an alarm rather than a reminder — set while the phone was locked. */
+    val isAlarm: Boolean = false
+) {
     fun toJson(): JSONObject = JSONObject()
-        .put("id", id).put("at", atMillis).put("text", text).put("done", done)
+        .put("id", id).put("at", atMillis).put("text", text).put("done", done).put("alarm", isAlarm)
 
     companion object {
         fun fromJson(o: JSONObject) = Reminder(
-            o.optInt("id"), o.optLong("at"), o.optString("text"), o.optBoolean("done", false)
+            o.optInt("id"), o.optLong("at"), o.optString("text"),
+            o.optBoolean("done", false), o.optBoolean("alarm", false)
         )
     }
 }
@@ -46,10 +54,10 @@ object ReminderStore {
         sp(ctx).edit().putString(KEY, a.toString()).apply()
     }
 
-    fun add(ctx: Context, atMillis: Long, text: String): Reminder {
+    fun add(ctx: Context, atMillis: Long, text: String, isAlarm: Boolean = false): Reminder {
         val seq = sp(ctx).getInt(KEY_SEQ, 1000) + 1
         sp(ctx).edit().putInt(KEY_SEQ, seq).apply()
-        val r = Reminder(seq, atMillis, text)
+        val r = Reminder(seq, atMillis, text, isAlarm = isAlarm)
         save(ctx, all(ctx) + r)
         return r
     }

@@ -12,6 +12,13 @@ sealed class Command {
     /** True for anything that is awkward to undo — calls, mainly. */
     open val needsConfirm: Boolean get() = false
 
+    /**
+     * True only when the action genuinely cannot happen behind a lock screen.
+     * Alarms, timers and reminders deliberately are NOT in this set — asking
+     * for a PIN to set a 6:30 alarm defeats the point of saying it out loud.
+     */
+    open val needsUnlock: Boolean get() = false
+
     data class Alarm(val hour: Int, val minute: Int, val atMillis: Long, val label: String?) : Command() {
         override val title = "Alarm · " + Fmt.clockAndDay(atMillis) + (label?.let { " · $it" } ?: "")
         override val spoken = "Alarm set for " + Fmt.spokenClock(atMillis) + Fmt.spokenDay(atMillis)
@@ -36,26 +43,31 @@ sealed class Command {
     data class Message(val who: String, val body: String?) : Command() {
         override val title = "WhatsApp $who" + (body?.let { ": $it" } ?: "")
         override val spoken = "Opening WhatsApp for $who"
+        override val needsUnlock = true
     }
 
     data class OpenApp(val name: String) : Command() {
         override val title = "Open $name"
         override val spoken = "Opening $name"
+        override val needsUnlock = true
     }
 
     data class Navigate(val place: String) : Command() {
         override val title = "Directions to $place"
         override val spoken = "Getting directions to $place"
+        override val needsUnlock = true
     }
 
     data class Play(val query: String) : Command() {
         override val title = "Play $query"
         override val spoken = "Playing $query"
+        override val needsUnlock = true
     }
 
     data class Search(val query: String) : Command() {
         override val title = "Search: $query"
         override val spoken = "Searching for $query"
+        override val needsUnlock = true
     }
 
     data class Torch(val on: Boolean) : Command() {

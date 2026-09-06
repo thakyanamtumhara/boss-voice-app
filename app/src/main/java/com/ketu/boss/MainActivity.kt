@@ -21,10 +21,12 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
+import com.ketu.boss.Prefs.autoUpdate
 import com.ketu.boss.Prefs.callNeedsConfirm
 import com.ketu.boss.Prefs.clearHistory
 import com.ketu.boss.Prefs.heardLog
 import com.ketu.boss.Prefs.history
+import com.ketu.boss.Prefs.lastUpdateCheck
 import com.ketu.boss.Prefs.listenMode
 import com.ketu.boss.Prefs.listening
 import com.ketu.boss.Prefs.sensitivity
@@ -34,6 +36,8 @@ import com.ketu.boss.databinding.ActivityMainBinding
 import com.ketu.boss.parse.Fmt
 import com.ketu.boss.reminders.ReminderScheduler
 import com.ketu.boss.reminders.ReminderStore
+import com.ketu.boss.update.UpdateWorker
+import com.ketu.boss.update.Updater
 
 /** Control panel: turn listening on, fix the permissions Android needs, see what happened. */
 class MainActivity : AppCompatActivity() {
@@ -92,6 +96,13 @@ class MainActivity : AppCompatActivity() {
             startActivity(Intent(this, TeachWakeActivity::class.java))
         }
         b.samsungBtn.setOnClickListener { openBatterySettings() }
+        b.updateSwitch.setOnCheckedChangeListener { _, v ->
+            if (!b.updateSwitch.isPressed) return@setOnCheckedChangeListener
+            autoUpdate = v
+            if (v) UpdateWorker.schedule(this) else UpdateWorker.cancel(this)
+            showUpdateLine()
+        }
+        b.checkUpdateBtn.setOnClickListener { checkForUpdateNow() }
         b.lockTestBtn.setOnClickListener {
             if (!listening) {
                 android.widget.Toast.makeText(this, "Turn listening on first", android.widget.Toast.LENGTH_SHORT).show()
@@ -151,13 +162,17 @@ class MainActivity : AppCompatActivity() {
         refresh()
         showState(WakeService.state, WakeService.detail)
 
-        Diagnostics.report(this, "open")
-
         if (pendingAutostart) { pendingAutostart = false; turnOn() }
         // Self-heal: if listening is meant to be on but Android stopped the
-        // service (reboot, low memory, a refused background start), this is
-        // the moment it can legitimately be started again.
+        // service (reboot, an update, low memory, a refused background start),
+        // this is the moment it can legitimately be started again.
         else if (listening && !WakeService.alive) WakeService.start(this)
+
+        // Snapshot AFTER the start attempt, or the report always claims the
+        // service is off and hides whether the self-heal actually worked.
+        b.root.postDelayed({ Diagnostics.report(this, "open") }, 4000)
+
+        UpdateWorker.schedule(this)
     }
 
     override fun onPause() {
@@ -205,6 +220,8 @@ class MainActivity : AppCompatActivity() {
         b.callSwitch.isChecked = callNeedsConfirm
         b.sensBar.progress = sensitivity
         showSensitivity()
+        b.updateSwitch.isChecked = autoUpdate
+        showUpdateLine()
         when (listenMode) {
             Prefs.MODE_SCREEN_ON -> b.modeScreen.isChecked = true
             Prefs.MODE_CHARGING -> b.modeCharging.isChecked = true
@@ -264,6 +281,57 @@ class MainActivity : AppCompatActivity() {
         b.blockerBtn.visibility = View.VISIBLE
         b.blockerBtn.text = "\u26a0  $text"
         b.blockerBtn.setOnClickListener { fix() }
+    }
+
+    private fun showUpdateLine() {
+        val last = lastUpdateCheck
+        b.updateLine.text = buildString {
+            append("On v").append(BuildConfig.VERSION_NAME)
+            if (!autoUpdate) append(" · off")
+            else if (last > 0) append(" · checked ").append(Fmt.clock(last))
+            else append(" · Wi-Fi only")
+        }
+    }
+
+    /** The manual path deliberately ignores the Wi-Fi-only rule. */
+    private fun checkForUpdateNow() {
+        b.checkUpdateBtn.isEnabled = false
+        b.updateLine.text = "Checking…"
+        Thread {
+            val r = Updater.latest()
+            runOnUiThread {
+                b.checkUpdateBtn.isEnabled = true
+                when {
+                    r == null -> b.updateLine.text = "Could not reach GitHub"
+                    !Updater.isNewer(r.version) -> {
+                        lastUpdateCheck = System.currentTimeMillis()
+                        b.updateLine.text = "v${BuildConfig.VERSION_NAME} is the newest"
+                    }
+                    else -> {
+                        b.updateLine.text = "Downloading v${r.version}…"
+                        if (!Updater.canInstall(this)) {
+                            runCatching {
+                                startActivity(
+                                    Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                                        Uri.parse("package:$packageName"))
+                                )
+                            }
+                        }
+                        Thread {
+                            val apk = Updater.download(this, r)
+                            runOnUiThread {
+                                if (apk == null) {
+                                    b.updateLine.text = "Download failed"
+                                } else {
+                                    b.updateLine.text = "Installing v${r.version}…"
+                                    Updater.install(this, apk, r.version)
+                                }
+                            }
+                        }.start()
+                    }
+                }
+            }
+        }.start()
     }
 
     private fun showSensitivity() {

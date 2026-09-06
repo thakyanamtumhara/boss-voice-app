@@ -27,6 +27,7 @@ class ReminderAlertActivity : AppCompatActivity() {
     companion object {
         const val EXTRA_TEXT = "text"
         const val EXTRA_AT = "at"
+        const val EXTRA_IS_ALARM = "is_alarm"
         private const val NOTIF_BASE = 6000
 
         fun postFullScreen(ctx: Context, r: Reminder) {
@@ -34,12 +35,13 @@ class ReminderAlertActivity : AppCompatActivity() {
             val open = Intent(ctx, ReminderAlertActivity::class.java)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
                 .putExtra(EXTRA_TEXT, r.text).putExtra(EXTRA_AT, r.atMillis)
+                .putExtra(EXTRA_IS_ALARM, r.isAlarm)
             val pi = PendingIntent.getActivity(
                 ctx, r.id, open, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
             )
             val n = NotificationCompat.Builder(ctx, BossApp.CH_REMINDER)
                 .setSmallIcon(R.drawable.ic_tile)
-                .setContentTitle("Reminder")
+                .setContentTitle(if (r.isAlarm) "Alarm" else "Reminder")
                 .setContentText(r.text)
                 .setStyle(NotificationCompat.BigTextStyle().bigText(r.text))
                 .setPriority(NotificationCompat.PRIORITY_MAX)
@@ -71,8 +73,10 @@ class ReminderAlertActivity : AppCompatActivity() {
         val b = ActivityAlertBinding.inflate(layoutInflater)
         setContentView(b.root)
 
-        val text = intent?.getStringExtra(EXTRA_TEXT).orEmpty().ifBlank { "Reminder" }
+        val isAlarm = intent?.getBooleanExtra(EXTRA_IS_ALARM, false) ?: false
+        val text = intent?.getStringExtra(EXTRA_TEXT).orEmpty().ifBlank { if (isAlarm) "Alarm" else "Reminder" }
         val at = intent?.getLongExtra(EXTRA_AT, System.currentTimeMillis()) ?: System.currentTimeMillis()
+        b.kindLine.text = if (isAlarm) "ALARM" else "REMINDER"
         b.text.text = text
         b.whenLine.text = Fmt.clockAndDay(at)
 

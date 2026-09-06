@@ -235,6 +235,34 @@
                 android:id="@+id/sensBar"
                 android:layout_width="match_parent" android:layout_height="wrap_content"
                 android:max="2" />
+
+            <View android:layout_width="match_parent" android:layout_height="1dp"
+                android:background="@color/ink_line" android:layout_marginVertical="12dp" />
+
+            <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:orientation="horizontal" android:gravity="center_vertical">
+                <LinearLayout android:layout_width="0dp" android:layout_height="wrap_content"
+                    android:layout_weight="1" android:orientation="vertical">
+                    <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
+                        android:text="Update itself automatically"
+                        android:textColor="@color/text_hi" android:textSize="15sp" />
+                    <TextView android:id="@+id/updateLine"
+                        android:layout_width="wrap_content" android:layout_height="wrap_content"
+                        android:layout_marginTop="2dp"
+                        android:textColor="@color/text_lo" android:textSize="12sp" />
+                </LinearLayout>
+                <com.google.android.material.materialswitch.MaterialSwitch
+                    android:id="@+id/updateSwitch"
+                    android:layout_width="wrap_content" android:layout_height="wrap_content" />
+            </LinearLayout>
+
+            <Button
+                android:id="@+id/checkUpdateBtn"
+                style="@style/Widget.Material3.Button.OutlinedButton"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="10dp"
+                android:text="Check for an update now" />
         </LinearLayout>
 
         <!-- reminders -->

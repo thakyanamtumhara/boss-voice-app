@@ -8,6 +8,7 @@
     android:padding="28dp">
 
     <TextView
+        android:id="@+id/kindLine"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:text="REMINDER"
