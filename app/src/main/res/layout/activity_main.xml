@@ -1,0 +1,249 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/ink"
+    android:fillViewport="true">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="18dp">
+
+        <!-- header -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:paddingTop="14dp">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/app_name"
+                android:textColor="@color/text_hi"
+                android:textSize="30sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/version"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="8dp"
+                android:background="@drawable/bg_chip"
+                android:paddingHorizontal="8dp"
+                android:paddingVertical="3dp"
+                android:textColor="@color/text_lo"
+                android:textSize="11sp" />
+
+            <View
+                android:layout_width="0dp"
+                android:layout_height="1dp"
+                android:layout_weight="1" />
+
+            <View
+                android:id="@+id/statusDot"
+                android:layout_width="10dp"
+                android:layout_height="10dp"
+                android:background="@drawable/dot_grey" />
+        </LinearLayout>
+
+        <TextView
+            android:id="@+id/status"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:textColor="@color/text_lo"
+            android:textSize="14sp" />
+
+        <!-- main switch -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:background="@drawable/bg_card"
+            android:padding="18dp"
+            android:layout_marginTop="16dp">
+
+            <LinearLayout
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:orientation="vertical">
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="Listen for the wake word"
+                    android:textColor="@color/text_hi"
+                    android:textSize="17sp" />
+
+                <TextView
+                    android:id="@+id/wakeWordLine"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="2dp"
+                    android:textColor="@color/amber"
+                    android:textSize="14sp" />
+            </LinearLayout>
+
+            <com.google.android.material.materialswitch.MaterialSwitch
+                android:id="@+id/listenSwitch"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content" />
+        </LinearLayout>
+
+        <Button
+            android:id="@+id/speakNow"
+            style="@style/Widget.Material3.Button"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="10dp"
+            android:text="Speak a command now" />
+
+        <Button
+            android:id="@+id/teach"
+            style="@style/Widget.Material3.Button.OutlinedButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="Change the wake word" />
+
+        <!-- setup -->
+        <TextView style="@style/BossSection" android:text="Setup" />
+        <LinearLayout
+            android:id="@+id/checklist"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:background="@drawable/bg_card"
+            android:padding="8dp" />
+
+        <TextView
+            android:id="@+id/samsungTip"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="10dp"
+            android:background="@drawable/bg_card"
+            android:padding="14dp"
+            android:textColor="@color/text_lo"
+            android:textSize="13sp"
+            android:lineSpacingExtra="3dp" />
+
+        <!-- options -->
+        <TextView style="@style/BossSection" android:text="Options" />
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:background="@drawable/bg_card"
+            android:padding="16dp">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="When to listen"
+                android:textColor="@color/text_hi"
+                android:textSize="15sp" />
+
+            <RadioGroup
+                android:id="@+id/modeGroup"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp">
+
+                <RadioButton android:id="@+id/modeAlways"
+                    android:layout_width="match_parent" android:layout_height="wrap_content"
+                    android:textColor="@color/text_hi"
+                    android:text="Always (most battery)" />
+                <RadioButton android:id="@+id/modeScreen"
+                    android:layout_width="match_parent" android:layout_height="wrap_content"
+                    android:textColor="@color/text_hi"
+                    android:text="Only when the screen is on" />
+                <RadioButton android:id="@+id/modeCharging"
+                    android:layout_width="match_parent" android:layout_height="wrap_content"
+                    android:textColor="@color/text_hi"
+                    android:text="Only while charging" />
+            </RadioGroup>
+
+            <View android:layout_width="match_parent" android:layout_height="1dp"
+                android:background="@color/ink_line" android:layout_marginVertical="12dp" />
+
+            <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:orientation="horizontal" android:gravity="center_vertical">
+                <TextView android:layout_width="0dp" android:layout_height="wrap_content"
+                    android:layout_weight="1" android:text="Speak the answers out loud"
+                    android:textColor="@color/text_hi" android:textSize="15sp" />
+                <com.google.android.material.materialswitch.MaterialSwitch
+                    android:id="@+id/speakSwitch"
+                    android:layout_width="wrap_content" android:layout_height="wrap_content" />
+            </LinearLayout>
+
+            <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:orientation="horizontal" android:gravity="center_vertical"
+                android:layout_marginTop="10dp">
+                <TextView android:layout_width="0dp" android:layout_height="wrap_content"
+                    android:layout_weight="1" android:text="Ask before placing a call"
+                    android:textColor="@color/text_hi" android:textSize="15sp" />
+                <com.google.android.material.materialswitch.MaterialSwitch
+                    android:id="@+id/callSwitch"
+                    android:layout_width="wrap_content" android:layout_height="wrap_content" />
+            </LinearLayout>
+
+            <TextView
+                android:id="@+id/sensLabel"
+                android:layout_width="wrap_content" android:layout_height="wrap_content"
+                android:layout_marginTop="14dp"
+                android:textColor="@color/text_hi" android:textSize="15sp" />
+            <SeekBar
+                android:id="@+id/sensBar"
+                android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:max="2" />
+        </LinearLayout>
+
+        <!-- reminders -->
+        <TextView style="@style/BossSection" android:text="Reminders" />
+        <LinearLayout
+            android:id="@+id/reminderList"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:background="@drawable/bg_card"
+            android:padding="12dp" />
+
+        <!-- what it can do -->
+        <TextView style="@style/BossSection" android:text="Things you can say" />
+        <TextView
+            android:id="@+id/examples"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:background="@drawable/bg_card"
+            android:padding="14dp"
+            android:textColor="@color/text_lo"
+            android:textSize="13sp"
+            android:lineSpacingExtra="5dp" />
+
+        <!-- history -->
+        <TextView style="@style/BossSection" android:text="Recent" />
+        <LinearLayout
+            android:id="@+id/historyList"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:background="@drawable/bg_card"
+            android:padding="12dp" />
+
+        <TextView
+            android:id="@+id/footer"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="18dp"
+            android:layout_marginBottom="26dp"
+            android:gravity="center"
+            android:textColor="@color/text_lo"
+            android:textSize="11sp" />
+    </LinearLayout>
+</ScrollView>

@@ -1,0 +1,15 @@
+<resources>
+    <!-- Amber / graphite / blue. Deliberately no red-vs-green pairing anywhere:
+         state is carried by brightness, icon and words as well as hue. -->
+    <color name="ink">#FF10131A</color>
+    <color name="ink_soft">#FF1B2029</color>
+    <color name="ink_line">#FF2C3340</color>
+    <color name="paper">#FFF6F7F9</color>
+    <color name="paper_soft">#FFFFFFFF</color>
+    <color name="amber">#FFF5A524</color>
+    <color name="amber_deep">#FFB4740A</color>
+    <color name="blue">#FF3D7DFF</color>
+    <color name="text_hi">#FFF2F4F8</color>
+    <color name="text_lo">#FF9AA4B4</color>
+    <color name="ic_launcher_background">#FF10131A</color>
+</resources>

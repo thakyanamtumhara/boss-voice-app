@@ -1,0 +1,377 @@
+package com.ketu.boss
+
+import android.Manifest
+import android.app.Notification
+import android.app.PendingIntent
+import android.app.Service
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
+import android.content.pm.PackageManager
+import android.os.BatteryManager
+import android.os.Build
+import android.os.Handler
+import android.os.HandlerThread
+import android.os.IBinder
+import android.os.Looper
+import android.os.PowerManager
+import android.util.Log
+import androidx.core.app.NotificationCompat
+import androidx.core.content.ContextCompat
+import com.ketu.boss.Prefs.listenMode
+import com.ketu.boss.Prefs.listening
+import com.ketu.boss.Prefs.isPaused
+import com.ketu.boss.Prefs.pausedUntil
+import com.ketu.boss.Prefs.sensitivity
+import com.ketu.boss.Prefs.spokenWakeWord
+import com.ketu.boss.Prefs.wakePhrases
+import org.json.JSONObject
+import org.vosk.Model
+import org.vosk.Recognizer
+import org.vosk.android.RecognitionListener
+import org.vosk.android.SpeechService
+
+/**
+ * Holds the microphone and waits for the wake word.
+ *
+ * Runs the offline recogniser in *grammar* mode: the decoder only knows the
+ * wake phrases plus "anything else", which is far cheaper than full
+ * transcription and is what keeps this viable as an all-day service.
+ */
+class WakeService : Service(), RecognitionListener {
+
+    companion object {
+        private const val TAG = "BossWake"
+        const val ACTION_START = "com.ketu.boss.START"
+        const val ACTION_STOP = "com.ketu.boss.STOP"
+        const val ACTION_RESUME_LISTENING = "com.ketu.boss.RESUME"
+        const val ACTION_LISTEN_NOW = "com.ketu.boss.LISTEN_NOW"
+        const val ACTION_PAUSE_1H = "com.ketu.boss.PAUSE_1H"
+        const val NOTIF_ID = 41
+
+        /** Broadcast so the UI can show what the service is doing. */
+        const val BROADCAST_STATE = "com.ketu.boss.STATE"
+        const val EXTRA_STATE = "state"
+        const val EXTRA_DETAIL = "detail"
+
+        @Volatile var state: String = "off"; private set
+        @Volatile var detail: String = ""; private set
+
+        fun start(ctx: Context) {
+            val i = Intent(ctx, WakeService::class.java).setAction(ACTION_START)
+            runCatching { ContextCompat.startForegroundService(ctx, i) }
+                .onFailure { Log.w(TAG, "could not start service", it) }
+        }
+
+        fun stop(ctx: Context) {
+            runCatching { ctx.startService(Intent(ctx, WakeService::class.java).setAction(ACTION_STOP)) }
+        }
+
+        fun resumeListening(ctx: Context) {
+            runCatching { ctx.startService(Intent(ctx, WakeService::class.java).setAction(ACTION_RESUME_LISTENING)) }
+        }
+    }
+
+    private val main = Handler(Looper.getMainLooper())
+    private lateinit var worker: HandlerThread
+    private lateinit var bg: Handler
+
+    private var model: Model? = null
+    private var recognizer: Recognizer? = null
+    private var speech: SpeechService? = null
+
+    private var triggered = false
+    private var lastTriggerAt = 0L
+    private var stopping = false
+
+    /** Set when the model refused a grammar; we then transcribe and fuzzy-match. */
+    private var freeFormFallback = false
+
+    // ---------- lifecycle ----------
+
+    override fun onCreate() {
+        super.onCreate()
+        BossApp.createChannels(this)
+        worker = HandlerThread("boss-vosk").apply { start() }
+        bg = Handler(worker.looper)
+        registerReceiver(gateReceiver, IntentFilter().apply {
+            addAction(Intent.ACTION_SCREEN_ON)
+            addAction(Intent.ACTION_SCREEN_OFF)
+            addAction(Intent.ACTION_POWER_CONNECTED)
+            addAction(Intent.ACTION_POWER_DISCONNECTED)
+        })
+    }
+
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        // Android wants the notification up within a few seconds of the start
+        // request, before any of the slow work begins.
+        startForeground(NOTIF_ID, buildNotification(getString(R.string.app_name), "Starting…"))
+
+        when (intent?.action) {
+            ACTION_STOP -> { shutdownEverything(); stopSelf(); return START_NOT_STICKY }
+            ACTION_PAUSE_1H -> {
+                pausedUntil = System.currentTimeMillis() + 3_600_000L
+                stopRecognition()
+                setState("paused", "Paused for an hour")
+                return START_STICKY
+            }
+            ACTION_LISTEN_NOW -> {
+                stopRecognition()
+                triggered = true
+                launchCommandUi(null)
+                return START_STICKY
+            }
+            ACTION_RESUME_LISTENING -> {
+                triggered = false
+                main.postDelayed({ ensureRunning() }, 350)
+                return START_STICKY
+            }
+        }
+
+        if (!listening) listening = true
+        ensureRunning()
+        return START_STICKY
+    }
+
+    override fun onDestroy() {
+        shutdownEverything()
+        runCatching { unregisterReceiver(gateReceiver) }
+        runCatching { worker.quitSafely() }
+        setState("off", "")
+        super.onDestroy()
+    }
+
+    override fun onBind(intent: Intent?): IBinder? = null
+
+    // ---------- listening gate ----------
+
+    private val gateReceiver = object : BroadcastReceiver() {
+        override fun onReceive(c: Context?, i: Intent?) {
+            if (!triggered) ensureRunning()
+        }
+    }
+
+    private fun screenOn(): Boolean =
+        (getSystemService(Context.POWER_SERVICE) as PowerManager).isInteractive
+
+    private fun charging(): Boolean {
+        val bm = getSystemService(Context.BATTERY_SERVICE) as BatteryManager
+        return bm.isCharging
+    }
+
+    private fun shouldListen(): Boolean {
+        if (!listening) return false
+        if (isPaused()) return false
+        if (triggered) return false
+        return when (listenMode) {
+            Prefs.MODE_SCREEN_ON -> screenOn()
+            Prefs.MODE_CHARGING -> charging()
+            else -> true
+        }
+    }
+
+    private fun gateReason(): String = when {
+        isPaused() -> "Paused"
+        listenMode == Prefs.MODE_SCREEN_ON -> "Waiting for the screen to come on"
+        listenMode == Prefs.MODE_CHARGING -> "Waiting for the charger"
+        else -> "Idle"
+    }
+
+    // ---------- recognition ----------
+
+    private fun ensureRunning() {
+        if (stopping) return
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO)
+            != PackageManager.PERMISSION_GRANTED
+        ) {
+            setState("error", "Microphone permission is off")
+            return
+        }
+        if (!shouldListen()) { stopRecognition(); setState("idle", gateReason()); return }
+        if (speech != null) return
+
+        setState("loading", if (model == null) "Getting the speech model ready…" else "Starting…")
+        bg.post {
+            try {
+                val m = model ?: VoskEngine.load(this) { p -> main.post { setState("loading", p) } }
+                model = m
+                main.post { startRecognizer(m) }
+            } catch (t: Throwable) {
+                Log.e(TAG, "model load failed", t)
+                main.post { setState("error", "Speech model failed to load") }
+            }
+        }
+    }
+
+    private fun startRecognizer(m: Model) {
+        if (!shouldListen() || speech != null) return
+        try {
+            val phrases = wakePhrases
+            val rec = try {
+                freeFormFallback = false
+                Recognizer(m, 16000f, WakeMatcher.grammarJson(phrases))
+            } catch (t: Throwable) {
+                // A word outside the model's lexicon kills grammar mode. Fall
+                // back to full transcription plus fuzzy matching — heavier, but
+                // it still works, which matters more.
+                Log.w(TAG, "grammar rejected, using free-form", t)
+                freeFormFallback = true
+                Recognizer(m, 16000f)
+            }
+            recognizer = rec
+            val svc = SpeechService(rec, 16000f)
+            speech = svc
+            svc.startListening(this)
+            setState("listening", getString(R.string.listening_for, spokenWakeWord))
+        } catch (t: Throwable) {
+            Log.e(TAG, "could not start listening", t)
+            setState("error", "Microphone is busy")
+            stopRecognition()
+        }
+    }
+
+    private fun stopRecognition() {
+        runCatching { speech?.stop() }
+        runCatching { speech?.shutdown() }
+        speech = null
+        runCatching { recognizer?.close() }
+        recognizer = null
+    }
+
+    private fun shutdownEverything() {
+        stopping = true
+        stopRecognition()
+        // The Model is deliberately kept: reloading costs seconds and it is
+        // freed when the process dies anyway.
+    }
+
+    // ---------- vosk callbacks (main thread) ----------
+
+    private fun textOf(json: String?, key: String): String =
+        runCatching { JSONObject(json ?: "{}").optString(key, "") }.getOrDefault("")
+
+    override fun onPartialResult(hypothesis: String?) {
+        consider(textOf(hypothesis, "partial"))
+    }
+
+    override fun onResult(hypothesis: String?) {
+        consider(textOf(hypothesis, "text"))
+    }
+
+    override fun onFinalResult(hypothesis: String?) {
+        consider(textOf(hypothesis, "text"))
+    }
+
+    override fun onError(e: Exception?) {
+        Log.e(TAG, "recognition error", e)
+        setState("error", e?.message ?: "Recognition error")
+        stopRecognition()
+        main.postDelayed({ ensureRunning() }, 2000)
+    }
+
+    override fun onTimeout() {
+        stopRecognition()
+        main.post { ensureRunning() }
+    }
+
+    private fun consider(heard: String) {
+        if (triggered || heard.isBlank()) return
+        val now = System.currentTimeMillis()
+        if (now - lastTriggerAt < 2500) return
+        val phrases = wakePhrases
+        if (!WakeMatcher.matches(heard, phrases, sensitivity)) return
+
+        lastTriggerAt = now
+        triggered = true
+        // Anything said after the wake word in the same breath is passed
+        // through, so "hey boss set an alarm for 6" works without a pause.
+        val tail = WakeMatcher.tail(heard, phrases).takeIf { it.length > 2 }
+        stopRecognition()
+        Speaker.chime(this)
+        Speaker.vibrate(this)
+        setState("heard", "Listening…")
+        launchCommandUi(tail)
+    }
+
+    private fun launchCommandUi(prefill: String?) {
+        val i = Intent(this, CommandActivity::class.java)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+            .putExtra(CommandActivity.EXTRA_PREFILL, prefill)
+        try {
+            startActivity(i)
+        } catch (t: Throwable) {
+            Log.w(TAG, "direct launch blocked, using full-screen notification", t)
+            showFullScreenLauncher(i)
+        }
+        // Safety net: if the pop-up never reports back, resume anyway.
+        main.postDelayed({ if (triggered) { triggered = false; ensureRunning() } }, 90_000)
+    }
+
+    private fun showFullScreenLauncher(target: Intent) {
+        val pi = PendingIntent.getActivity(
+            this, 7, target,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        val n = NotificationCompat.Builder(this, BossApp.CH_REMINDER)
+            .setSmallIcon(R.drawable.ic_tile)
+            .setContentTitle("Boss is listening")
+            .setContentText("Tap to speak")
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setCategory(NotificationCompat.CATEGORY_CALL)
+            .setAutoCancel(true)
+            .setFullScreenIntent(pi, true)
+            .setContentIntent(pi)
+            .build()
+        runCatching {
+            androidx.core.app.NotificationManagerCompat.from(this).notify(42, n)
+        }
+    }
+
+    // ---------- notification ----------
+
+    private fun pi(action: String, code: Int): PendingIntent = PendingIntent.getBroadcast(
+        this, code,
+        Intent(this, ServiceControlReceiver::class.java).setAction(action),
+        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+    )
+
+    private fun buildNotification(title: String, text: String): Notification {
+        val open = PendingIntent.getActivity(
+            this, 1, Intent(this, MainActivity::class.java),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        return NotificationCompat.Builder(this, BossApp.CH_SERVICE)
+            .setSmallIcon(R.drawable.ic_tile)
+            .setContentTitle(title)
+            .setContentText(text)
+            .setOngoing(true)
+            .setSilent(true)
+            .setShowWhen(false)
+            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
+            .setContentIntent(open)
+            .addAction(0, "Speak", pi(ACTION_LISTEN_NOW, 2))
+            .addAction(0, "Pause 1h", pi(ACTION_PAUSE_1H, 3))
+            .addAction(0, "Stop", pi(ACTION_STOP, 4))
+            .build()
+    }
+
+    private fun setState(s: String, d: String) {
+        state = s; detail = d
+        val title = when (s) {
+            "listening" -> "Boss is listening"
+            "loading" -> "Boss is getting ready"
+            "heard" -> "Boss heard you"
+            "paused" -> "Boss is paused"
+            "error" -> "Boss needs attention"
+            "idle" -> "Boss is waiting"
+            else -> getString(R.string.app_name)
+        }
+        runCatching {
+            androidx.core.app.NotificationManagerCompat.from(this).notify(NOTIF_ID, buildNotification(title, d))
+        }
+        sendBroadcast(Intent(BROADCAST_STATE).setPackage(packageName)
+            .putExtra(EXTRA_STATE, s).putExtra(EXTRA_DETAIL, d))
+    }
+}
