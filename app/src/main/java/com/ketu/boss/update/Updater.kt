@@ -68,25 +68,56 @@ object Updater {
         null
     }.onFailure { Log.w(TAG, "release check failed", it) }.getOrNull()
 
-    /** Downloads to private storage. Blocking. Returns null on any failure. */
-    fun download(ctx: Context, r: Release): File? = runCatching {
+    /**
+     * Downloads to private storage. Blocking.
+     *
+     * A 50 MB transfer over a phone connection gets cut often enough that one
+     * attempt is not enough — observed truncating at 48 of 53 MB on a first
+     * try. Resumes with a Range request where the server allows it, and only
+     * a complete file of exactly the right size is ever handed to the
+     * installer.
+     */
+    fun download(ctx: Context, r: Release, attempts: Int = 3): File? {
         val dir = File(ctx.cacheDir, "updates").apply { mkdirs() }
-        dir.listFiles()?.forEach { it.delete() }
+        dir.listFiles()?.filter { it.name != "boss-${r.version}.apk" }?.forEach { it.delete() }
         val out = File(dir, "boss-${r.version}.apk")
-        val c = (URL(r.url).openConnection() as HttpURLConnection)
-        c.connectTimeout = 20_000; c.readTimeout = 120_000
-        c.instanceFollowRedirects = true
-        c.setRequestProperty("User-Agent", "Boss/${BuildConfig.VERSION_NAME}")
-        c.inputStream.use { ins -> out.outputStream().use { ins.copyTo(it, 128 * 1024) } }
-        c.disconnect()
-        // A truncated download would be rejected by the installer anyway, but
-        // catching it here keeps the failure legible.
-        if (r.size > 0 && out.length() != r.size) {
-            Log.w(TAG, "size mismatch: got ${out.length()} want ${r.size}")
-            out.delete(); return@runCatching null
+
+        for (attempt in 1..attempts) {
+            val have = if (out.exists()) out.length() else 0L
+            if (r.size > 0 && have == r.size) return out
+            if (r.size > 0 && have > r.size) out.delete()
+
+            val ok = runCatching {
+                val from = if (out.exists()) out.length() else 0L
+                val c = (URL(r.url).openConnection() as HttpURLConnection)
+                c.connectTimeout = 20_000
+                c.readTimeout = 300_000
+                c.instanceFollowRedirects = true
+                c.setRequestProperty("User-Agent", "Boss/${BuildConfig.VERSION_NAME}")
+                if (from > 0) c.setRequestProperty("Range", "bytes=$from-")
+                val appending = from > 0 && c.responseCode == HttpURLConnection.HTTP_PARTIAL
+                if (from > 0 && !appending) out.delete()
+                c.inputStream.use { ins ->
+                    java.io.FileOutputStream(out, appending).use { fos ->
+                        ins.copyTo(fos, 256 * 1024)
+                        fos.fd.sync()
+                    }
+                }
+                c.disconnect()
+                true
+            }.onFailure { Log.w(TAG, "download attempt $attempt failed", it) }.getOrDefault(false)
+
+            val len = if (out.exists()) out.length() else 0L
+            if (ok && (r.size <= 0 || len == r.size)) return out
+            Log.w(TAG, "attempt $attempt incomplete: have $len of ${r.size}")
+            if (!ok && len == 0L) out.delete()
+            Thread.sleep(2000L * attempt)
         }
-        out
-    }.onFailure { Log.w(TAG, "download failed", it) }.getOrNull()
+
+        Log.w(TAG, "giving up on ${r.version} after $attempts attempts")
+        out.delete()
+        return null
+    }
 
     fun canInstall(ctx: Context): Boolean =
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) ctx.packageManager.canRequestPackageInstalls()
