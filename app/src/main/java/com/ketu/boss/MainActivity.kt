@@ -39,6 +39,7 @@ class MainActivity : AppCompatActivity() {
     companion object { const val EXTRA_AUTOSTART = "autostart" }
 
     private lateinit var b: ActivityMainBinding
+    private var pendingAutostart = false
 
     private val askPermissions =
         registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { refresh() }
@@ -107,7 +108,10 @@ class MainActivity : AppCompatActivity() {
             }
         })
 
-        if (intent?.getBooleanExtra(EXTRA_AUTOSTART, false) == true) turnOn()
+        // Deliberately not started here: at onCreate the app does not yet
+        // count as foreground, and Android 14 refuses a microphone service
+        // started from the background. onResume is the first safe moment.
+        pendingAutostart = intent?.getBooleanExtra(EXTRA_AUTOSTART, false) == true
     }
 
     override fun onResume() {
@@ -118,6 +122,12 @@ class MainActivity : AppCompatActivity() {
         )
         refresh()
         showState(WakeService.state, WakeService.detail)
+
+        if (pendingAutostart) { pendingAutostart = false; turnOn() }
+        // Self-heal: if listening is meant to be on but Android stopped the
+        // service (reboot, low memory, a refused background start), this is
+        // the moment it can legitimately be started again.
+        else if (listening && !WakeService.alive) WakeService.start(this)
     }
 
     override fun onPause() {

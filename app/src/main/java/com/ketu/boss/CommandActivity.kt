@@ -49,6 +49,7 @@ class CommandActivity : AppCompatActivity() {
 
     /** Set when we asked a follow-up ("when?") and are waiting for the answer. */
     private var awaiting: Command.NeedTime? = null
+    private var watchdog: Runnable? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -126,6 +127,15 @@ class CommandActivity : AppCompatActivity() {
             state("Couldn't open the microphone")
             b.typeRow.visibility = View.VISIBLE
         }
+        // Some recognisers neither return a result nor report an error. Put
+        // the keyboard within reach rather than leaving a dead pop-up.
+        watchdog?.let { main.removeCallbacks(it) }
+        watchdog = Runnable {
+            if (pending == null && b.typeRow.visibility != View.VISIBLE) {
+                b.typeRow.visibility = View.VISIBLE
+            }
+        }
+        main.postDelayed(watchdog!!, 9000)
     }
 
     private fun restartListening() {
@@ -193,6 +203,7 @@ class CommandActivity : AppCompatActivity() {
     // ---------- understanding ----------
 
     private fun handleTranscript(raw: String) {
+        cancelWatchdog()
         releaseRecognizer()
         b.heard.text = raw
         b.typeRow.visibility = View.GONE
@@ -262,6 +273,11 @@ class CommandActivity : AppCompatActivity() {
         countdown = null
     }
 
+    private fun cancelWatchdog() {
+        watchdog?.let { main.removeCallbacks(it) }
+        watchdog = null
+    }
+
     // ---------- doing ----------
 
     private fun execute(c: Command) {
@@ -327,6 +343,7 @@ class CommandActivity : AppCompatActivity() {
         if (finished) return
         finished = true
         cancelCountdown()
+        cancelWatchdog()
         releaseRecognizer()
         WakeService.resumeListening(this)
         finish()

@@ -56,6 +56,8 @@ class WakeService : Service(), RecognitionListener {
         const val EXTRA_DETAIL = "detail"
 
         @Volatile var state: String = "off"; private set
+        /** True only while the service really holds a foreground slot. */
+        @Volatile var alive: Boolean = false; private set
         @Volatile var detail: String = ""; private set
 
         fun start(ctx: Context) {
@@ -69,7 +71,12 @@ class WakeService : Service(), RecognitionListener {
         }
 
         fun resumeListening(ctx: Context) {
-            runCatching { ctx.startService(Intent(ctx, WakeService::class.java).setAction(ACTION_RESUME_LISTENING)) }
+            val i = Intent(ctx, WakeService::class.java).setAction(ACTION_RESUME_LISTENING)
+            // startService alone is refused from the background on O+; the
+            // foreground variant is the one that survives the pop-up closing.
+            runCatching { ContextCompat.startForegroundService(ctx, i) }
+                .recoverCatching { ctx.startService(i) }
+                .onFailure { Log.w(TAG, "could not resume listening", it) }
         }
     }
 
@@ -84,6 +91,7 @@ class WakeService : Service(), RecognitionListener {
     private var triggered = false
     private var lastTriggerAt = 0L
     private var stopping = false
+    private var foregroundOk = false
 
     /** Set when the model refused a grammar; we then transcribe and fuzzy-match. */
     private var freeFormFallback = false
@@ -106,7 +114,24 @@ class WakeService : Service(), RecognitionListener {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         // Android wants the notification up within a few seconds of the start
         // request, before any of the slow work begins.
-        startForeground(NOTIF_ID, buildNotification(getString(R.string.app_name), "Starting…"))
+        //
+        // From Android 14 a microphone-typed foreground service may only be
+        // started while the app is genuinely in the foreground — a reboot, or
+        // a restart after the process was killed, is refused. That refusal is
+        // a SecurityException that would otherwise take the whole process
+        // down, so it is caught and turned into a tap-to-resume notification.
+        try {
+            startForeground(NOTIF_ID, buildNotification(getString(R.string.app_name), "Starting…"))
+        } catch (t: Throwable) {
+            Log.w(TAG, "foreground start refused", t)
+            foregroundOk = false
+            setStateNoNotify("blocked", "Android blocked the mic — open Boss once to resume")
+            Notify.tapToResume(this)
+            stopSelf()
+            return START_NOT_STICKY
+        }
+        foregroundOk = true
+        alive = true
 
         when (intent?.action) {
             ACTION_STOP -> { shutdownEverything(); stopSelf(); return START_NOT_STICKY }
@@ -135,6 +160,7 @@ class WakeService : Service(), RecognitionListener {
     }
 
     override fun onDestroy() {
+        alive = false
         shutdownEverything()
         runCatching { unregisterReceiver(gateReceiver) }
         runCatching { worker.quitSafely() }
@@ -357,8 +383,15 @@ class WakeService : Service(), RecognitionListener {
             .build()
     }
 
+    private fun setStateNoNotify(s: String, d: String) {
+        state = s; detail = d
+        sendBroadcast(Intent(BROADCAST_STATE).setPackage(packageName)
+            .putExtra(EXTRA_STATE, s).putExtra(EXTRA_DETAIL, d))
+    }
+
     private fun setState(s: String, d: String) {
         state = s; detail = d
+        if (!foregroundOk) { setStateNoNotify(s, d); return }
         val title = when (s) {
             "listening" -> "Boss is listening"
             "loading" -> "Boss is getting ready"
