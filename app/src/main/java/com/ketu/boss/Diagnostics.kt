@@ -114,6 +114,33 @@ object Diagnostics {
             })
 
             // The decisive evidence: what the wake engine actually decoded.
+            // The two things that most plausibly kill a 50 MB download and
+            // that I currently cannot see from here.
+            o.put("network", runCatching {
+                val cm = ctx.getSystemService(Context.CONNECTIVITY_SERVICE) as android.net.ConnectivityManager
+                val n = cm.activeNetwork
+                val caps = n?.let { cm.getNetworkCapabilities(it) }
+                JSONObject().apply {
+                    put("kind", when {
+                        caps == null -> "none"
+                        caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_WIFI) -> "wifi"
+                        caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_CELLULAR) -> "cellular"
+                        caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_ETHERNET) -> "ethernet"
+                        else -> "other"
+                    })
+                    put("metered", caps == null || !caps.hasCapability(
+                        android.net.NetworkCapabilities.NET_CAPABILITY_NOT_METERED))
+                    put("validated", caps?.hasCapability(
+                        android.net.NetworkCapabilities.NET_CAPABILITY_VALIDATED) ?: false)
+                }
+            }.getOrElse { JSONObject().put("error", it.toString()) })
+
+            o.put("free_mb", runCatching {
+                val dir = ctx.getExternalFilesDir(android.os.Environment.DIRECTORY_DOWNLOADS)
+                    ?: ctx.cacheDir
+                android.os.StatFs(dir.absolutePath).availableBytes / (1024 * 1024)
+            }.getOrDefault(-1L))
+
             o.put("update", JSONObject().apply {
                 put("auto", ctx.autoUpdate)
                 put("last_check", ctx.lastUpdateCheck)
