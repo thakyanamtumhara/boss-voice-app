@@ -129,28 +129,43 @@ object Updater {
                 }
                 when (status) {
                     DownloadManager.STATUS_SUCCESSFUL -> {
-                        // Ask where it actually put the file. Assuming the path
-                        // reported "0 of 52986368" on Ketu's phone for a
-                        // download that had in fact succeeded — DownloadManager
-                        // is free to write somewhere other than the name asked
-                        // for, and COLUMN_LOCAL_URI is the only honest answer.
-                        val localUri = c.getString(
-                            c.getColumnIndexOrThrow(DownloadManager.COLUMN_LOCAL_URI))
-                        val actual = localUri?.let { u ->
-                            runCatching { Uri.parse(u).path?.let(::File) }.getOrNull()
-                        }?.takeIf { it.exists() && it.length() > 0 } ?: out
+                        // Copy the bytes out of DownloadManager's custody
+                        // BEFORE remove(id). remove() deletes the file it
+                        // downloaded, so returning that path handed the
+                        // installer something that no longer existed —
+                        // FileNotFoundException/ENOENT on Ketu's phone, twice.
+                        //
+                        // openDownloadedFile() also removes every guess about
+                        // WHERE it put the file, which was the other half of
+                        // this same bug.
+                        val priv = File(File(ctx.cacheDir, "updates").apply { mkdirs() },
+                            "boss-${r.version}.apk")
+                        priv.delete()
+                        val copied = runCatching {
+                            dm.openDownloadedFile(id).use { pfd ->
+                                java.io.FileInputStream(pfd.fileDescriptor).use { ins ->
+                                    java.io.FileOutputStream(priv).use { fos ->
+                                        ins.copyTo(fos, 256 * 1024)
+                                        fos.fd.sync()
+                                    }
+                                }
+                            }
+                            true
+                        }.onFailure { Log.w(TAG, "could not read the finished download", it) }
+                            .getOrDefault(false)
 
-                        if (r.size > 0 && actual.length() != r.size) {
-                            Log.w(TAG, "finished but ${actual.length()} of ${r.size} at ${actual.path}")
+                        dm.remove(id)   // safe now: we already have our own copy
+
+                        if (!copied || (r.size > 0 && priv.length() != r.size)) {
+                            Log.w(TAG, "finished but got ${priv.length()} of ${r.size}")
                             Diagnostics.report(ctx, "update_download_failed",
-                                "finished short: ${actual.length()} of ${r.size}; " +
-                                    "uri=$localUri exists=${actual.exists()}", force = true)
-                            actual.delete(); dm.remove(id)
+                                "copy after download: ${priv.length()} of ${r.size}, copied=$copied",
+                                force = true)
+                            priv.delete()
                             return@runCatching null
                         }
-                        dm.remove(id)
-                        Log.i(TAG, "downloaded ${actual.length()} bytes to ${actual.path}")
-                        return@runCatching actual
+                        Log.i(TAG, "downloaded ${priv.length()} bytes to ${priv.path}")
+                        return@runCatching priv
                     }
                     DownloadManager.STATUS_FAILED -> {
                         val reason = c.getInt(c.getColumnIndexOrThrow(DownloadManager.COLUMN_REASON))
